@@ -1,0 +1,155 @@
+import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import crypto from "node:crypto";
+import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { encryptSecret } from "@/lib/crypto/aes";
+
+const createIntegrationSchema = z.object({
+  projectId: z.string().uuid(),
+  name: z.string().min(2).max(100),
+  phoneNumberId: z.string().min(5).max(50),
+  wabaId: z.string().min(5).max(50),
+  accessToken: z.string().min(10),
+  appSecret: z.string().min(10),
+  templateName: z.string().default("otp_authentication"),
+  templateLanguage: z.string().default("en_US"),
+  isSandbox: z.boolean().default(false),
+});
+
+export async function POST(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const parsed = createIntegrationSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.errors[0]?.message }, { status: 422 });
+  }
+
+  const {
+    projectId,
+    name,
+    phoneNumberId,
+    wabaId,
+    accessToken,
+    appSecret,
+    templateName,
+    templateLanguage,
+    isSandbox,
+  } = parsed.data;
+
+  // Verify that the user owns the project
+  const admin = createAdminClient();
+  const { data: project, error: projErr } = await admin
+    .from("projects")
+    .select("id")
+    .eq("id", projectId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (projErr || !project) {
+    return NextResponse.json({ error: "Project not found or not owned by you." }, { status: 403 });
+  }
+
+  // Encrypt secrets at rest using authenticated AES-256-GCM
+  let encryptedAccessToken: string;
+  let encryptedAppSecret: string;
+  try {
+    encryptedAccessToken = encryptSecret(accessToken);
+    encryptedAppSecret = encryptSecret(appSecret);
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: "Server encryption is not properly configured. Cannot store live credentials securely." },
+      { status: 500 }
+    );
+  }
+
+  // Generate strong random webhook verification token (32 random bytes = 64 hex chars)
+  const webhookVerifyToken = crypto.randomBytes(32).toString("hex");
+
+  const { data: integration, error: insertError } = await admin
+    .from("integrations")
+    .insert({
+      project_id: projectId,
+      user_id: user.id,
+      name,
+      phone_number_id: phoneNumberId,
+      waba_id: wabaId,
+      template_name: templateName,
+      template_language: templateLanguage,
+      webhook_verify_token: webhookVerifyToken,
+      encrypted_access_token: encryptedAccessToken,
+      encrypted_app_secret: encryptedAppSecret,
+      key_version: 1,
+      status: isSandbox ? "verified" : "pending",
+      is_sandbox: isSandbox,
+    })
+    .select("id, name, phone_number_id, waba_id, template_name, template_language, webhook_verify_token, status, is_sandbox, created_at")
+    .single();
+
+  if (insertError || !integration) {
+    return NextResponse.json({ error: "Failed to save integration." }, { status: 500 });
+  }
+
+  // Audit log
+  await admin.from("audit_events").insert({
+    user_id: user.id,
+    action: "integration.created",
+    resource_type: "integration",
+    resource_id: integration.id,
+    metadata: { name, phone_number_id: phoneNumberId, is_sandbox: isSandbox },
+  });
+
+  return NextResponse.json({
+    success: true,
+    integration,
+  });
+}
+
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const searchParams = request.nextUrl.searchParams;
+  const id = searchParams.get("id");
+  if (!id) {
+    return NextResponse.json({ error: "Missing integration ID" }, { status: 400 });
+  }
+
+  const admin = createAdminClient();
+  const { data: deleted, error } = await admin
+    .from("integrations")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id)
+    .select("id, name")
+    .maybeSingle();
+
+  if (error || !deleted) {
+    return NextResponse.json({ error: "Integration not found or could not be deleted." }, { status: 404 });
+  }
+
+  await admin.from("audit_events").insert({
+    user_id: user.id,
+    action: "integration.deleted",
+    resource_type: "integration",
+    resource_id: deleted.id,
+  });
+
+  return NextResponse.json({ success: true, message: "Integration deleted." });
+}
