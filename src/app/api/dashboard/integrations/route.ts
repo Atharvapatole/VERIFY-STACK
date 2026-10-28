@@ -17,6 +17,51 @@ const createIntegrationSchema = z.object({
   isSandbox: z.boolean().default(false),
 });
 
+export async function GET(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const admin = createAdminClient();
+  const { data: integrations, error } = await admin
+    .from("integrations")
+    .select(`
+      id,
+      project_id,
+      name,
+      phone_number_id,
+      waba_id,
+      template_name,
+      template_language,
+      webhook_verify_token,
+      status,
+      is_sandbox,
+      last_tested_at,
+      last_webhook_received_at,
+      last_webhook_verified_at,
+      last_webhook_error,
+      webhook_events_received,
+      webhook_events_processed,
+      webhook_events_ignored,
+      webhook_events_failed,
+      created_at,
+      updated_at
+    `)
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    return NextResponse.json({ error: "Failed to fetch integrations" }, { status: 500 });
+  }
+
+  return NextResponse.json({
+    integrations: integrations || [],
+  });
+}
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

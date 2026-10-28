@@ -50,11 +50,23 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Protect Admin Routes
-  if (pathname.startsWith("/admin")) {
+  // Redirect legacy /admin to /platform-admin
+  if (pathname === "/admin" || pathname.startsWith("/admin/")) {
+    const url = request.nextUrl.clone();
+    url.pathname = pathname.replace(/^\/admin/, "/platform-admin");
+    return NextResponse.redirect(url);
+  }
+
+  // Protect Platform Admin Routes
+  if (pathname.startsWith("/platform-admin")) {
+    // Allow public access to admin login page
+    if (pathname === "/platform-admin/login") {
+      return supabaseResponse;
+    }
+
     if (!user) {
       const url = request.nextUrl.clone();
-      url.pathname = "/login";
+      url.pathname = "/platform-admin/login";
       url.searchParams.set("redirect", pathname);
       return NextResponse.redirect(url);
     }
@@ -68,9 +80,9 @@ export async function middleware(request: NextRequest) {
     const isAllowed = allowlist.includes(userEmail);
 
     if (!isAllowed) {
-      // Forbidden: Redirect to dashboard with error notice
+      // Non-admin user: Redirect to admin login with explicit unauthorized error
       const url = request.nextUrl.clone();
-      url.pathname = "/dashboard";
+      url.pathname = "/platform-admin/login";
       url.searchParams.set("error", "unauthorized_admin");
       return NextResponse.redirect(url);
     }

@@ -15,6 +15,9 @@ export interface Database {
           full_name: string;
           email: string;
           role: "user" | "admin";
+          status: "active" | "suspended";
+          admin_notes: string | null;
+          monthly_otp_limit: number;
           created_at: string;
           updated_at: string;
         };
@@ -23,6 +26,9 @@ export interface Database {
           full_name: string;
           email: string;
           role?: "user" | "admin";
+          status?: "active" | "suspended";
+          admin_notes?: string | null;
+          monthly_otp_limit?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -31,6 +37,9 @@ export interface Database {
           full_name?: string;
           email?: string;
           role?: "user" | "admin";
+          status?: "active" | "suspended";
+          admin_notes?: string | null;
+          monthly_otp_limit?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -81,6 +90,13 @@ export interface Database {
           status: "pending" | "verified" | "failed" | "disabled";
           is_sandbox: boolean;
           last_tested_at: string | null;
+          last_webhook_received_at: string | null;
+          last_webhook_verified_at: string | null;
+          last_webhook_error: string | null;
+          webhook_events_received: number;
+          webhook_events_processed: number;
+          webhook_events_ignored: number;
+          webhook_events_failed: number;
           created_at: string;
           updated_at: string;
         };
@@ -100,6 +116,13 @@ export interface Database {
           status?: "pending" | "verified" | "failed" | "disabled";
           is_sandbox?: boolean;
           last_tested_at?: string | null;
+          last_webhook_received_at?: string | null;
+          last_webhook_verified_at?: string | null;
+          last_webhook_error?: string | null;
+          webhook_events_received?: number;
+          webhook_events_processed?: number;
+          webhook_events_ignored?: number;
+          webhook_events_failed?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -119,6 +142,13 @@ export interface Database {
           status?: "pending" | "verified" | "failed" | "disabled";
           is_sandbox?: boolean;
           last_tested_at?: string | null;
+          last_webhook_received_at?: string | null;
+          last_webhook_verified_at?: string | null;
+          last_webhook_error?: string | null;
+          webhook_events_received?: number;
+          webhook_events_processed?: number;
+          webhook_events_ignored?: number;
+          webhook_events_failed?: number;
           created_at?: string;
           updated_at?: string;
         };
@@ -409,6 +439,67 @@ export interface Database {
           reason?: string;
           status?: "pending" | "resolved" | "dismissed";
           created_at?: string;
+        };
+      };
+      admin_audit_logs: {
+        Row: {
+          id: string;
+          admin_id: string | null;
+          admin_email: string;
+          action: string;
+          target_type: string;
+          target_id: string | null;
+          metadata: Json;
+          ip_address: string | null;
+          user_agent: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          admin_id?: string | null;
+          admin_email: string;
+          action: string;
+          target_type: string;
+          target_id?: string | null;
+          metadata?: Json;
+          ip_address?: string | null;
+          user_agent?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          admin_id?: string | null;
+          admin_email?: string;
+          action?: string;
+          target_type?: string;
+          target_id?: string | null;
+          metadata?: Json;
+          ip_address?: string | null;
+          user_agent?: string | null;
+          created_at?: string;
+        };
+      };
+      platform_settings: {
+        Row: {
+          key: string;
+          value: Json;
+          description: string | null;
+          updated_at: string;
+          updated_by: string | null;
+        };
+        Insert: {
+          key: string;
+          value: Json;
+          description?: string | null;
+          updated_at?: string;
+          updated_by?: string | null;
+        };
+        Update: {
+          key?: string;
+          value?: Json;
+          description?: string | null;
+          updated_at?: string;
+          updated_by?: string | null;
         };
       };
     };

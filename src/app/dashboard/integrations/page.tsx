@@ -14,6 +14,12 @@ import {
   Lock,
   RefreshCw,
   Info,
+  Activity,
+  CheckCircle2,
+  XCircle,
+  HelpCircle,
+  Radio,
+  FileCheck,
 } from "lucide-react";
 
 export default function IntegrationsPage() {
@@ -21,6 +27,10 @@ export default function IntegrationsPage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Diagnostic state
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [diagnosticResult, setDiagnosticResult] = useState<any | null>(null);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -38,7 +48,7 @@ export default function IntegrationsPage() {
 
   const fetchIntegrations = async () => {
     try {
-      const res = await fetch("/api/v1/integrations");
+      const res = await fetch("/api/dashboard/integrations");
       if (res.ok) {
         const data = await res.json();
         setIntegrations(data.integrations || []);
@@ -60,13 +70,32 @@ export default function IntegrationsPage() {
     setTimeout(() => setCopiedKey(null), 2000);
   };
 
+  const handleRunDiagnostic = async (integrationId: string) => {
+    setTestingId(integrationId);
+    setDiagnosticResult(null);
+    try {
+      const res = await fetch(`/api/dashboard/integrations/${integrationId}/test-webhook`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      setDiagnosticResult(data);
+      fetchIntegrations();
+    } catch (err: any) {
+      setDiagnosticResult({
+        success: false,
+        error: err.message || "Failed to execute webhook diagnostic",
+      });
+    } finally {
+      setTestingId(null);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
     setFormError(null);
 
     try {
-      // Fetch user's default project ID
       const projRes = await fetch("/api/v1/usage");
       let projectId = "";
       if (projRes.ok) {
@@ -75,7 +104,6 @@ export default function IntegrationsPage() {
       }
 
       if (!projectId) {
-        // Fallback default UUID for testing
         projectId = "00000000-0000-0000-0000-000000000000";
       }
 
@@ -124,13 +152,18 @@ export default function IntegrationsPage() {
     }
   };
 
-  const appBaseUrl = typeof window !== "undefined" ? window.location.origin : "https://yourdomain.com";
+  // Canonical production URL priority
+  const appBaseUrl =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    (typeof window !== "undefined" && window.location.origin.includes("vercel.app")
+      ? window.location.origin
+      : "https://verifystack-lyart.vercel.app");
 
   return (
     <div className="flex-1 flex flex-col">
       <DashboardHeader
-        title="WhatsApp Cloud API Integrations"
-        description="Connect your Meta Business WhatsApp Cloud credentials. Secrets are stored with AES-256-GCM encryption."
+        title="WhatsApp Cloud API Integrations & Webhooks"
+        description="Connect your Meta Business WhatsApp Cloud credentials and configure integration-specific webhook endpoints."
       />
 
       <div className="p-8 space-y-8 max-w-7xl">
@@ -151,7 +184,7 @@ export default function IntegrationsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-sm font-semibold text-white">Connected Providers</h2>
-            <p className="text-xs text-zinc-400">View callback URLs and webhook tokens for your integrations.</p>
+            <p className="text-xs text-zinc-400">View callback URLs, verification tokens, and live telemetry for your integrations.</p>
           </div>
           <button
             onClick={() => setShowModal(true)}
@@ -167,7 +200,7 @@ export default function IntegrationsPage() {
             <PlugZap className="h-10 w-10 mx-auto text-zinc-600 mb-3" />
             <h3 className="font-semibold text-white mb-1">No WhatsApp Integrations Connected</h3>
             <p className="text-zinc-500 max-w-md mx-auto mb-6">
-              Connect your Meta WhatsApp Cloud API credentials to enable live OTP delivery to real recipient devices.
+              Connect your Meta WhatsApp Cloud API credentials to enable live OTP delivery and generate a dedicated webhook endpoint.
             </p>
             <button
               onClick={() => setShowModal(true)}
@@ -177,11 +210,14 @@ export default function IntegrationsPage() {
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-6">
+          <div className="grid grid-cols-1 gap-8">
             {integrations.map((item) => {
-              const webhookUrl = `${appBaseUrl}/api/webhooks/whatsapp/${item.id}`;
+              const webhookUrl = `${appBaseUrl.replace(/\/$/, "")}/api/webhooks/whatsapp/${item.id}`;
+              const isVerified = item.status === "verified";
+
               return (
-                <div key={item.id} className="rounded-xl border border-zinc-800 bg-[#0f1117] p-6 space-y-6">
+                <div key={item.id} className="rounded-xl border border-zinc-800 bg-[#0f1117] p-6 space-y-6 shadow-xl">
+                  {/* Top Bar */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
                     <div className="flex items-center gap-3">
                       <div className="h-10 w-10 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
@@ -192,21 +228,34 @@ export default function IntegrationsPage() {
                           <h3 className="text-sm font-semibold text-white">{item.name}</h3>
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-medium ${
-                              item.status === "verified"
+                              isVerified
                                 ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                                 : "bg-amber-500/10 text-amber-400 border border-amber-500/20"
                             }`}
                           >
-                            {item.status}
+                            {item.status.toUpperCase()}
                           </span>
+                          {item.is_sandbox && (
+                            <span className="px-2 py-0.5 rounded text-[10px] bg-zinc-800 text-zinc-400 font-mono">
+                              SANDBOX
+                            </span>
+                          )}
                         </div>
                         <span className="text-[11px] text-zinc-500 font-mono">
-                          Phone ID: {item.phone_number_id} • WABA ID: {item.waba_id}
+                          ID: {item.id} • Phone ID: {item.phone_number_id} • WABA: {item.waba_id}
                         </span>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleRunDiagnostic(item.id)}
+                        disabled={testingId === item.id}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-medium hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-3.5 w-3.5 ${testingId === item.id ? "animate-spin" : ""}`} />
+                        {testingId === item.id ? "Running Diagnostic..." : "Verify Webhook Setup"}
+                      </button>
                       <button
                         onClick={() => handleDelete(item.id)}
                         className="p-1.5 rounded-lg border border-zinc-800 text-zinc-400 hover:text-rose-400 hover:border-rose-500/30 transition-colors"
@@ -217,52 +266,194 @@ export default function IntegrationsPage() {
                     </div>
                   </div>
 
-                  {/* Webhook Configuration Details */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                    <div className="p-3.5 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-1.5">
-                      <div className="flex items-center justify-between text-zinc-400">
-                        <span className="font-medium text-zinc-300">Webhook Callback URL</span>
-                        <button
-                          onClick={() => handleCopy(webhookUrl, `url-${item.id}`)}
-                          className="flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
-                        >
-                          {copiedKey === `url-${item.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                          {copiedKey === `url-${item.id}` ? "Copied" : "Copy URL"}
-                        </button>
+                  {/* Dedicated Webhook Setup Section */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Radio className="h-4 w-4 text-emerald-400" />
+                        <h4 className="text-xs font-semibold text-white uppercase tracking-wider">
+                          WhatsApp Webhook Setup (Integration-Specific)
+                        </h4>
                       </div>
-                      <div className="font-mono text-zinc-300 break-all bg-[#090a0d] p-2 rounded border border-zinc-800/80 text-[11px]">
-                        {webhookUrl}
-                      </div>
-                      <span className="text-[10px] text-zinc-500 block">Paste this into Meta App Dashboard → WhatsApp → Configuration</span>
+                      <span className="text-[11px] text-zinc-400 font-mono">
+                        Route: <code className="text-emerald-400">/api/webhooks/whatsapp/{item.id}</code>
+                      </span>
                     </div>
 
-                    <div className="p-3.5 rounded-lg border border-zinc-800 bg-zinc-900/50 space-y-1.5">
-                      <div className="flex items-center justify-between text-zinc-400">
-                        <span className="font-medium text-zinc-300">Webhook Verify Token</span>
-                        <button
-                          onClick={() => handleCopy(item.webhook_verify_token, `tok-${item.id}`)}
-                          className="flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300"
-                        >
-                          {copiedKey === `tok-${item.id}` ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                          {copiedKey === `tok-${item.id}` ? "Copied" : "Copy Token"}
-                        </button>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                      {/* Webhook Callback URL */}
+                      <div className="p-4 rounded-lg border border-zinc-800 bg-zinc-900/60 space-y-2">
+                        <div className="flex items-center justify-between text-zinc-400">
+                          <span className="font-semibold text-zinc-200">Production Webhook Callback URL</span>
+                          <button
+                            onClick={() => handleCopy(webhookUrl, `url-${item.id}`)}
+                            className="flex items-center gap-1 text-[11px] font-medium text-emerald-400 hover:text-emerald-300"
+                          >
+                            {copiedKey === `url-${item.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                            {copiedKey === `url-${item.id}` ? "Copied" : "Copy URL"}
+                          </button>
+                        </div>
+                        <div className="font-mono text-zinc-200 break-all bg-[#090a0d] p-2.5 rounded border border-zinc-800/90 text-xs select-all">
+                          {webhookUrl}
+                        </div>
+                        <p className="text-[10px] text-zinc-500 leading-relaxed">
+                          Enter this exact URL into Meta App Dashboard → WhatsApp → Configuration. Notice that the URL ends with this integration&apos;s unique ID.
+                        </p>
                       </div>
-                      <div className="font-mono text-zinc-300 break-all bg-[#090a0d] p-2 rounded border border-zinc-800/80 text-[11px]">
-                        {item.webhook_verify_token}
+
+                      {/* Webhook Verification Token */}
+                      <div className="p-4 rounded-lg border border-zinc-800 bg-zinc-900/60 space-y-2">
+                        <div className="flex items-center justify-between text-zinc-400">
+                          <span className="font-semibold text-zinc-200">Webhook Verification Token</span>
+                          <button
+                            onClick={() => handleCopy(item.webhook_verify_token, `tok-${item.id}`)}
+                            className="flex items-center gap-1 text-[11px] font-medium text-emerald-400 hover:text-emerald-300"
+                          >
+                            {copiedKey === `tok-${item.id}` ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                            {copiedKey === `tok-${item.id}` ? "Copied" : "Copy Token"}
+                          </button>
+                        </div>
+                        <div className="font-mono text-emerald-300 break-all bg-[#090a0d] p-2.5 rounded border border-zinc-800/90 text-xs select-all">
+                          {item.webhook_verify_token}
+                        </div>
+                        <p className="text-[10px] text-zinc-500 leading-relaxed">
+                          This is a high-entropy secret verified during Meta&apos;s GET challenge. It is NOT your Meta Access Token or App Secret.
+                        </p>
                       </div>
-                      <span className="text-[10px] text-zinc-500 block">Secret string used for Meta GET challenge validation</span>
                     </div>
                   </div>
 
-                  {/* Template & Encryption Security Status */}
-                  <div className="flex flex-wrap items-center justify-between gap-4 pt-2 text-[11px] text-zinc-400 border-t border-zinc-800/60">
-                    <div className="flex items-center gap-2">
-                      <Lock className="h-3.5 w-3.5 text-emerald-400" />
-                      <span>Credentials Encrypted with AES-256-GCM (Ciphertext only at rest)</span>
+                  {/* Live Webhook Telemetry & Status Cards */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950/70">
+                      <span className="text-[10px] text-zinc-500 block">Events Received</span>
+                      <span className="text-lg font-bold text-white font-mono">{item.webhook_events_received || 0}</span>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Total incoming hits</span>
                     </div>
-                    <div className="font-mono">
-                      Template: <span className="text-zinc-200">{item.template_name}</span> ({item.template_language})
+
+                    <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950/70">
+                      <span className="text-[10px] text-zinc-500 block">Processed & Recorded</span>
+                      <span className="text-lg font-bold text-emerald-400 font-mono">{item.webhook_events_processed || 0}</span>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Valid status updates</span>
                     </div>
+
+                    <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950/70">
+                      <span className="text-[10px] text-zinc-500 block">Ignored (Duplicate)</span>
+                      <span className="text-lg font-bold text-zinc-400 font-mono">{item.webhook_events_ignored || 0}</span>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Idempotent deduplication</span>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950/70">
+                      <span className="text-[10px] text-zinc-500 block">Failures / Invalid</span>
+                      <span className="text-lg font-bold text-rose-400 font-mono">{item.webhook_events_failed || 0}</span>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Bad tokens or signatures</span>
+                    </div>
+                  </div>
+
+                  {/* Webhook History & Diagnostics Banner */}
+                  <div className="flex flex-wrap items-center justify-between gap-4 p-3 rounded-lg border border-zinc-800/80 bg-zinc-900/30 text-[11px] text-zinc-400">
+                    <div className="flex flex-wrap items-center gap-4">
+                      <div>
+                        Last Webhook Received:{" "}
+                        <span className="text-zinc-200 font-mono">
+                          {item.last_webhook_received_at ? new Date(item.last_webhook_received_at).toLocaleString() : "Never"}
+                        </span>
+                      </div>
+                      <div>
+                        Last Verification Challenge:{" "}
+                        <span className="text-zinc-200 font-mono">
+                          {item.last_webhook_verified_at ? new Date(item.last_webhook_verified_at).toLocaleString() : "Never"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div>
+                      {item.last_webhook_error ? (
+                        <span className="text-rose-400 flex items-center gap-1 font-mono">
+                          <AlertTriangle className="h-3 w-3" /> Error: {item.last_webhook_error}
+                        </span>
+                      ) : (
+                        <span className="text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="h-3 w-3" /> Healthy Webhook Pipeline
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Diagnostic Test Results Drawer (when run) */}
+                  {diagnosticResult && diagnosticResult.integration_id === item.id && (
+                    <div className="p-4 rounded-lg border border-emerald-500/30 bg-emerald-500/5 space-y-3 text-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 font-semibold text-emerald-300">
+                          <Activity className="h-4 w-4" />
+                          <span>Real Integration Diagnostic Report</span>
+                        </div>
+                        <button
+                          onClick={() => setDiagnosticResult(null)}
+                          className="text-zinc-400 hover:text-white"
+                        >
+                          ✕
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        {Object.entries(diagnosticResult.diagnostics || {}).map(([key, value]: [string, any]) => (
+                          <div key={key} className="p-3 rounded bg-zinc-950 border border-zinc-800 space-y-1">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-zinc-300 capitalize">{key.replace(/_/g, " ")}</span>
+                              {value.status === "passed" ? (
+                                <span className="text-emerald-400 font-bold flex items-center gap-1 text-[10px]">
+                                  <CheckCircle2 className="h-3 w-3" /> PASSED
+                                </span>
+                              ) : (
+                                <span className="text-rose-400 font-bold flex items-center gap-1 text-[10px]">
+                                  <XCircle className="h-3 w-3" /> FAILED
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-zinc-500">{value.detail}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Meta Developer Setup Instructions Accordion */}
+                  <div className="border-t border-zinc-800/80 pt-4">
+                    <details className="group">
+                      <summary className="cursor-pointer text-xs font-semibold text-zinc-300 hover:text-emerald-400 transition-colors flex items-center justify-between">
+                        <span>Meta Developer Webhook Setup Guide (Step-by-Step)</span>
+                        <span className="text-zinc-500 group-open:rotate-180 transition-transform">▼</span>
+                      </summary>
+
+                      <div className="mt-4 p-4 rounded-lg border border-zinc-800 bg-zinc-950 text-xs text-zinc-300 space-y-2.5 leading-relaxed">
+                        <ol className="list-decimal pl-5 space-y-2 text-zinc-400">
+                          <li>
+                            Open the <strong className="text-white">Meta for Developers</strong> portal and select the Meta App associated with this integration.
+                          </li>
+                          <li>
+                            In the left sidebar, navigate to <strong className="text-white">WhatsApp → Configuration</strong>.
+                          </li>
+                          <li>
+                            Under <strong>Webhook</strong>, click <strong className="text-white">Edit</strong>.
+                          </li>
+                          <li>
+                            Paste the <strong>Production Webhook Callback URL</strong> copied from above:
+                            <code className="text-emerald-400 font-mono block mt-1 break-all bg-zinc-900 p-1.5 rounded">{webhookUrl}</code>
+                          </li>
+                          <li>
+                            Paste the matching <strong>Webhook Verification Token</strong>:
+                            <code className="text-emerald-400 font-mono block mt-1 break-all bg-zinc-900 p-1.5 rounded">{item.webhook_verify_token}</code>
+                          </li>
+                          <li>
+                            Click <strong className="text-white">Verify and Save</strong>. Meta will immediately execute a GET challenge to verify your endpoint. Verify Stack will respond with the challenge string and mark the integration as <strong className="text-emerald-400">VERIFIED</strong>.
+                          </li>
+                          <li>
+                            Under <strong>Webhook fields</strong>, click <strong className="text-white">Manage</strong> and subscribe to <code className="text-amber-300 font-mono">messages</code>. This delivers live delivery status updates (<code className="text-zinc-200">sent</code>, <code className="text-zinc-200">delivered</code>, <code className="text-zinc-200">read</code>, <code className="text-zinc-200">failed</code>) into your Verify Stack audit logs.
+                          </li>
+                        </ol>
+                      </div>
+                    </details>
                   </div>
                 </div>
               );

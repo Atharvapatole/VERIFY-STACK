@@ -1,219 +1,157 @@
 # Verify Stack — WhatsApp OTP Infrastructure for Developers
 
-> **Tagline:** WhatsApp OTP Infrastructure for Developers.
+> **Tagline:** WhatsApp OTP Infrastructure for Developers.  
+> **Production URL:** `https://verifystack-lyart.vercel.app`  
+> **Platform Admin Portal:** `https://verifystack-lyart.vercel.app/platform-admin/login`
 
-Verify Stack is a secure, developer-first SaaS platform that lets software teams connect their own Meta WhatsApp Business Account (WABA) / Cloud API and request OTP messages directly from their applications via a high-performance REST API.
+Verify Stack is a high-security, multi-tenant developer SaaS platform that lets software teams connect their own Meta WhatsApp Business Account (WABA) / Cloud API and request OTP messages directly from their applications via a REST API.
 
 ---
 
-## 1. Architectural Highlights
+## 1. Architectural Highlights & Security
 
-- **Multi-Tenant Own-WABA Model**: Each tenant connects and maintains its own Meta WhatsApp Business Platform credentials. Message delivery is billed directly by Meta to your own WABA. Verify Stack does not charge a mandatory platform fee for initial usage.
-- **Zero-Knowledge Credential Security**: Stored Meta Access Tokens and App Secrets are encrypted at rest using **AES-256-GCM** with authenticated 96-bit nonces and 128-bit authentication tags. Plaintext secrets are never returned in read APIs.
+- **Multi-Tenant Own-WABA Model**: Each tenant connects and maintains its own Meta WhatsApp Business Platform credentials. Message delivery is billed directly by Meta to your own WABA. Verify Stack does not charge a mandatory platform fee for core initial usage.
+- **Dedicated Webhook Route**: Meta delivers webhook events to `https://verifystack-lyart.vercel.app/api/webhooks/whatsapp/INTEGRATION_ID`. Each integration possesses its own unique callback URL, dedicated verification token, and decrypted App Secret validation.
+- **Zero-Knowledge Credential Security**: Stored Meta Access Tokens and App Secrets are encrypted at rest using **AES-256-GCM** with authenticated 96-bit nonces, 128-bit authentication tags, and key versioning. Plaintext secrets are never returned in read APIs.
 - **Keyed HMAC-SHA256 OTP Protection**: 6-digit numeric codes have low entropy ($10^6$ combinations). Verify Stack calculates a keyed HMAC using a server-side secret (`OTP_HMAC_SECRET`) before storing challenge records in PostgreSQL, preventing offline rainbow table attacks if a database disclosure occurs.
 - **5-Attempt Lockout & Replay Resistance**: Every OTP challenge is limited to 5 verification attempts. Once verified, the challenge is atomically invalidated using conditional database updates to prevent race-condition replays.
 - **High-Entropy API Keys**: Supports `vs_live_...` (dispatches through official Meta Cloud API) and `vs_test_...` (simulates OTP lifecycle safely in isolated sandbox). Only cryptographic hashes (`API_KEY_HASH_SECRET`) are stored in the database.
-- **Persistent Distributed Rate Limiting**: Built on PostgreSQL sliding-window token buckets, functioning reliably across serverless lambda/edge instances with local memory fallback.
-- **Meta Webhook Signature Verification**: Webhooks validate `X-Hub-Signature-256` in constant time (`crypto.timingSafeEqual`) using decrypted tenant App Secrets.
+- **God-Level Platform Admin Console**: Dedicated admin console at `/platform-admin` protected by server-side allowlists (`ADMIN_EMAIL_ALLOWLIST`) and role checks. Includes tenant governance, suspension, controlled deletion workflows, real-time health checks, audit logs, and rate limit policies.
 
 ---
 
-## 2. Prerequisites
+## 2. Production Webhook URL & Configuration
 
-- **Node.js**: v18.18+ or v20+ (tested on Node.js v26)
-- **Package Manager**: npm, pnpm, or yarn
-- **Supabase Account**: Free Supabase project (PostgreSQL + Auth + Row Level Security)
-- **Meta Developer Account**: An eligible Meta App with WhatsApp Business Platform added (for live sending; not needed for Sandbox simulation)
-
----
-
-## 3. Environment Variables Configuration
-
-Copy `.env.example` to `.env.local`:
-
-```bash
-cp .env.example .env.local
+### Webhook URL Template
+```
+https://verifystack-lyart.vercel.app/api/webhooks/whatsapp/INTEGRATION_ID
 ```
 
-### Required Configuration Fields:
+Replace `INTEGRATION_ID` with the actual UUID of the WhatsApp integration generated in the Verify Stack dashboard.
 
-| Variable | Description | Example / Format |
+### Where to Find Your Integration ID
+1. Open your developer dashboard at `/dashboard/integrations`.
+2. Locate your connected WhatsApp integration card.
+3. The exact, copyable **Production Webhook Callback URL** is pre-generated with your real integration ID:
+   `https://verifystack-lyart.vercel.app/api/webhooks/whatsapp/e7b92f14-9988-4c8d-812e-108273645123`
+4. The matching **Webhook Verification Token** is displayed alongside it.
+
+### Meta Developers Webhook Setup Guide:
+1. Open [Meta for Developers](https://developers.facebook.com/) and navigate to your Meta App.
+2. In the left sidebar, navigate to **WhatsApp** -> **Configuration**.
+3. In the **Webhook** section, click **Edit**.
+4. **Callback URL**: Paste the integration-specific URL (`https://verifystack-lyart.vercel.app/api/webhooks/whatsapp/<INTEGRATION_ID>`).
+5. **Verify Token**: Paste the integration's verification token.
+6. Click **Verify and Save**. Verify Stack's serverless GET handler verifies the token using constant-time comparison (`crypto.timingSafeEqual`) and returns the exact challenge string.
+7. Under **Webhook fields**, click **Manage** and subscribe to **`messages`**. This ensures message status callbacks (`sent`, `delivered`, `read`, `failed`) are ingested and verified against `X-Hub-Signature-256`.
+8. In the Verify Stack dashboard, click **Verify Webhook Setup** to run a self-test diagnostic verifying credential decryption, token integrity, and HMAC signature algorithms.
+
+---
+
+## 3. Platform Admin Portal & Provisioning
+
+The Platform Admin portal is located at:
+```
+https://verifystack-lyart.vercel.app/platform-admin/login
+```
+
+### Initial Admin Provisioning (One-Time Setup)
+
+To provision or promote the first platform administrator without committing credentials to Git:
+
+#### Option A: Via Command Line (Recommended)
+Run the secure provisioning script locally or in a deployment container:
+```bash
+npx tsx scripts/provision-admin.ts --email=admin@yourdomain.com --name="Platform Administrator" --password="YourStrongSecurePassword123"
+```
+*(If the user already exists in your Supabase Auth database, it will promote their role to `'admin'` without altering their existing password).*
+
+#### Option B: Via Supabase SQL Editor
+Run the following SQL in your Supabase project:
+```sql
+UPDATE public.profiles
+SET role = 'admin', status = 'active'
+WHERE email = 'admin@yourdomain.com';
+```
+
+#### Option C: Add to Environment Allowlist
+In your Vercel project environment variables, add:
+```
+ADMIN_EMAIL_ALLOWLIST="admin@yourdomain.com"
+```
+
+Once provisioned, navigate to `/platform-admin/login`, enter your credentials, and you will be securely authenticated into the Platform Admin console.
+
+---
+
+## 4. Required Vercel Environment Variables
+
+Set these environment variables in your Vercel Dashboard (**Settings** -> **Environment Variables**):
+
+| Variable | Description | Value / Format |
 | :--- | :--- | :--- |
+| `NEXT_PUBLIC_APP_URL` | Canonical Production HTTPS URL | `https://verifystack-lyart.vercel.app` |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase Project URL | `https://your-project.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase Anon Key (Public) | `eyJhbGci...` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Service Role Key (Server Only) | `eyJhbGci...` |
-| `NEXT_PUBLIC_APP_URL` | Canonical Public URL | `http://localhost:3000` or `https://verify.yourdomain.com` |
-| `INTEGRATION_ENCRYPTION_KEY` | 32-byte Hex Master Encryption Key | Generate: `openssl rand -hex 32` |
-| `API_KEY_HASH_SECRET` | 32-byte Hex API Key Hashing Secret | Generate: `openssl rand -hex 32` |
-| `OTP_HMAC_SECRET` | 32-byte Hex OTP Keyed HMAC Secret | Generate: `openssl rand -hex 32` |
-| `ADMIN_EMAIL_ALLOWLIST` | Authorized admin email addresses | `admin@yourdomain.com,security@yourdomain.com` |
-| `META_GRAPH_API_VERSION` | Meta Graph API Version | Default: `v22.0` |
-
-> [!CAUTION]
-> Never commit `.env.local` or paste production secrets into Git source control. Live message sending automatically fails closed if `INTEGRATION_ENCRYPTION_KEY` is missing or uses placeholder keys.
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase Anonymous Key (Client) | `eyJhbGciOi...` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase Service Role Key (Server Only) | `eyJhbGciOi...` |
+| `INTEGRATION_ENCRYPTION_KEY` | 32-byte Hex Master Key for AES-256-GCM | `openssl rand -hex 32` |
+| `API_KEY_HASH_SECRET` | 32-byte Hex Secret for API Key Hashing | `openssl rand -hex 32` |
+| `OTP_HMAC_SECRET` | 32-byte Hex Secret for Keyed OTP HMAC | `openssl rand -hex 32` |
+| `ADMIN_EMAIL_ALLOWLIST` | Comma-separated authorized admin emails | `admin@yourdomain.com,security@yourdomain.com` |
+| `META_GRAPH_API_VERSION` | Meta Graph API Version | `v22.0` |
 
 ---
 
-## 4. Supabase Setup & Disabling Signup Email Confirmation
+## 5. Supabase SQL Migrations
 
-Verify Stack allows developers to sign up and start testing immediately without waiting for an activation email.
+Apply the migration files located in `supabase/migrations/`:
 
-### Step 4.1: Disable Email Confirmation in Supabase Dashboard
-1. Open your **Supabase Dashboard** -> Select your Project.
-2. Navigate to **Authentication** -> **Providers** -> **Email**.
-3. Toggle **Confirm email** to **OFF** (`Disabled`).
-4. Click **Save**.
+1. `20261028000001_initial_schema.sql` — Core database tables (`profiles`, `projects`, `integrations`, `api_keys`, `otp_challenges`, `send_attempts`, `delivery_events`, `usage_events`, `idempotency_keys`, `rate_limit_buckets`, `audit_events`, `abuse_reports`) with strict RLS policies.
+2. `20261028000002_admin_and_webhook_telemetry.sql` — Webhook telemetry counters (`last_webhook_received_at`, `webhook_events_received`, `webhook_events_processed`, etc.), user moderation fields, `admin_audit_logs`, and `platform_settings`.
 
-*(Note: Password reset emails remain fully functional even when signup confirmation is turned off).*
-
-### Step 4.2: Apply Database Migrations
-Run the SQL migration script located at:
-`supabase/migrations/20261028000001_initial_schema.sql`
-
-You can apply it via:
-1. **Supabase Dashboard**: Open the **SQL Editor**, paste the contents of `20261028000001_initial_schema.sql`, and click **Run**.
-2. **Supabase CLI**:
-   ```bash
-   npx supabase db push
-   ```
-
-This creates all multi-tenant tables (`profiles`, `projects`, `integrations`, `api_keys`, `otp_challenges`, `send_attempts`, `delivery_events`, `usage_events`, `idempotency_keys`, `rate_limit_buckets`, `audit_events`, `abuse_reports`) and enforces Row Level Security (RLS) policies.
-
----
-
-## 5. Local Development
-
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-
-2. Run the automated test suite:
-   ```bash
-   npm test
-   ```
-
-3. Start the Next.js development server:
-   ```bash
-   npm run dev
-   ```
-
-4. Open [http://localhost:3000](http://localhost:3000) in your browser.
-
----
-
-## 6. Meta WhatsApp Cloud API Setup Checklist
-
-To connect live WhatsApp delivery:
-
-1. **Create a Meta App**:
-   - Go to [Meta for Developers](https://developers.facebook.com/).
-   - Create an app with the **Business** type.
-   - Add **WhatsApp** product to your app.
-
-2. **Obtain Identifiers**:
-   - In WhatsApp -> API Setup, copy your **Phone Number ID** and **WhatsApp Business Account ID (WABA ID)**.
-
-3. **Generate Permanent System User Token**:
-   - Go to **Business Manager Settings** -> **Users** -> **System Users**.
-   - Create a System User with **Admin** role.
-   - Assign WhatsApp Business Account asset permissions.
-   - Generate Token with `whatsapp_business_messaging` and `whatsapp_business_management` scopes.
-
-4. **Create an Authentication Template**:
-   - In WhatsApp Manager -> Message Templates, create a template named `otp_authentication`.
-   - Category: **Authentication**.
-   - Add a Copy Code button or URL button with parameter `{{1}}`.
-   - Submit for Meta approval (usually approved in minutes).
-
-5. **Configure Webhook Callback**:
-   - In Verify Stack dashboard under **WhatsApp Integrations**, copy your **Webhook Callback URL**:
-     `https://YOUR_DOMAIN/api/webhooks/whatsapp/<INTEGRATION_ID>`
-   - Copy the generated **Webhook Verify Token**.
-   - In Meta App Dashboard -> WhatsApp -> Configuration:
-     - Set Callback URL to your HTTPS endpoint.
-     - Set Verify Token to your integration's verify token.
-     - Click **Verify and Save**.
-     - Subscribe to the `messages` webhook field.
-
-> [!IMPORTANT]
-> Webhooks require a public **HTTPS** endpoint. In local development, use a tunneling tool (such as ngrok or Cloudflare Tunnel) to expose port 3000.
-
----
-
-## 7. Custom Domain vs Preview URLs
-
-In production deployments (such as Vercel, Railway, or AWS):
-- Do **not** rely permanently on temporary preview URLs (e.g. `*.vercel.app`) as your Meta webhook endpoint. Every preview deployment generates a new domain, breaking webhook verification.
-- Always configure a production custom domain (e.g. `https://verify.yourdomain.com`) in your DNS and update `NEXT_PUBLIC_APP_URL`.
-
----
-
-## 8. REST API Quick Reference
-
-### 8.1 Dispatch OTP
+Run via Supabase Dashboard **SQL Editor** or Supabase CLI:
 ```bash
-curl -X POST https://api.verifystack.dev/api/v1/otp/send \
-  -H "Authorization: Bearer vs_live_YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: req_uuid_102938" \
-  -d '{
-    "phone": "+14155552671",
-    "purpose": "login"
-  }'
+npx supabase db push
 ```
 
-**Response (200 OK):**
-```json
-{
-  "challenge_id": "83fb8b01-1b77-440f-90e1-4c55e9ba4cb8",
-  "status": "accepted",
-  "phone_masked": "+1415****671",
-  "expires_at": "2026-10-28T12:35:00.000Z",
-  "is_sandbox": false
-}
-```
-
-### 8.2 Verify OTP
-```bash
-curl -X POST https://api.verifystack.dev/api/v1/otp/verify \
-  -H "Authorization: Bearer vs_live_YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "challenge_id": "83fb8b01-1b77-440f-90e1-4c55e9ba4cb8",
-    "code": "729104"
-  }'
-```
-
-**Response (200 OK):**
-```json
-{
-  "verified": true,
-  "status": "verified",
-  "challenge_id": "83fb8b01-1b77-440f-90e1-4c55e9ba4cb8"
-}
-```
+### Disabling Signup Email Confirmation (Supabase Setting)
+To allow immediate developer onboarding:
+1. Open your **Supabase Dashboard** -> **Authentication** -> **Providers** -> **Email**.
+2. Toggle **Confirm email** to **OFF** (`Disabled`).
+3. Click **Save**.
 
 ---
 
-## 9. Test Suite & Verification
+## 6. Testing & Acceptance Verification
 
-Run the automated test suite:
+Run the automated test suite locally:
 ```bash
 npm test
 ```
 
-Tests cover:
-- Authenticated AES-256-GCM encryption/decryption roundtrips and nonce uniqueness.
-- OTP CSPRNG generation, keyed HMAC hashing, and phone masking.
-- API key generation (`vs_live_`, `vs_test_`), hashing, and constant-time verification.
-- Meta `X-Hub-Signature-256` webhook HMAC verification and tampering rejection.
-- OTP lifecycle lockout (strict 5-attempt limit), expiration checks, and replay prevention.
-- Distributed rate limiter window thresholds and fallback behavior.
-- Meta Cloud API provider adapter payload formatting and error sanitization.
+### Test Coverage (30 Unit & Integration Tests):
+- **Admin Authentication**: Allowlist validation, whitespace & case-insensitivity, non-allowlisted rejection (403), confirmation phrase matching for safe account deletion.
+- **Webhook GET Challenge**: Constant-time verification token matching, rejection of mismatched tokens (403).
+- **Webhook POST Signature**: Raw-body HMAC-SHA256 calculation with decrypted App Secret, `X-Hub-Signature-256` constant-time verification, rejection of forged signatures (401).
+- **Event Idempotency**: Deduplication of duplicate webhook status events.
+- **OTP Lifecycle**: Keyed HMAC hashing, 5-minute expiry, strict 5-attempt lockout, replay attack prevention.
+- **Credential Encryption**: AES-256-GCM roundtrip, nonce uniqueness, auth tag verification, tampering rejection.
+- **Meta Provider Adapter**: Official WhatsApp template formatting, international phone normalization, client error sanitization without credential leakage.
 
 ---
 
-## 10. License
+## 7. Troubleshooting Guide
 
-Verify Stack is distributed under the MIT License. Meta, WhatsApp, and WhatsApp Business are registered trademarks of Meta Platforms, Inc.
+### Webhook Verification Fails in Meta Dashboard
+- **Symptom**: Meta reports "The URL couldn't be validated".
+- **Fix**:
+  1. Ensure the URL ends with your actual integration ID: `https://verifystack-lyart.vercel.app/api/webhooks/whatsapp/<INTEGRATION_ID>`.
+  2. Verify that the **Verify Token** entered in Meta exactly matches the token displayed in your Verify Stack dashboard.
+  3. Ensure your production deployment has `NEXT_PUBLIC_APP_URL="https://verifystack-lyart.vercel.app"` and database migrations applied.
+
+### Admin Login Denied
+- **Symptom**: "Access denied. Your account does not possess platform administrator privileges."
+- **Fix**:
+  1. Confirm that the signing-in email is listed in `ADMIN_EMAIL_ALLOWLIST` in Vercel environment variables.
+  2. Or verify that the user's record in `public.profiles` has `role = 'admin'` and `status = 'active'`.
+  3. Run `npm run admin:provision -- --email=your_email@domain.com` to promote your user.

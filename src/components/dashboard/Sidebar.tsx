@@ -83,11 +83,11 @@ export function DashboardSidebar() {
       {/* Footer controls */}
       <div className="p-3 border-t border-zinc-800/80 space-y-1">
         <Link
-          href="/admin"
+          href="/platform-admin/login"
           className="flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-medium text-zinc-400 hover:text-amber-400 hover:bg-amber-400/5 transition-colors"
         >
           <ShieldAlert className="h-4 w-4 text-amber-500" />
-          Platform Admin
+          Go to Platform Admin
         </Link>
         <button
           onClick={handleLogout}

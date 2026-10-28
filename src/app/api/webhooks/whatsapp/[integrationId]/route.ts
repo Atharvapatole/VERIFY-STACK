@@ -7,8 +7,9 @@ import crypto from "node:crypto";
 /**
  * Meta WhatsApp Cloud API Webhook Handler for individual integrations.
  *
- * GET: Handles the Meta Hub subscription challenge.
- * POST: Handles message delivery statuses (sent, delivered, read, failed).
+ * Route: /api/webhooks/whatsapp/[integrationId]
+ * GET: Handles the Meta Hub subscription challenge with constant-time token comparison.
+ * POST: Validates X-Hub-Signature-256 against decrypted App Secret and records delivery events idempotently.
  */
 export async function GET(
   request: NextRequest,
@@ -28,7 +29,7 @@ export async function GET(
   const admin = createAdminClient();
   const { data: integration, error } = await admin
     .from("integrations")
-    .select("id, webhook_verify_token, status")
+    .select("id, webhook_verify_token, status, webhook_events_received, webhook_events_processed, webhook_events_failed")
     .eq("id", integrationId)
     .maybeSingle();
 
@@ -42,21 +43,37 @@ export async function GET(
     token.length === expectedToken.length &&
     crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expectedToken));
 
-  if (mode === "subscribe" && tokenMatch) {
-    // If integration was in pending status, mark as verified
-    if (integration.status === "pending") {
-      await admin
-        .from("integrations")
-        .update({ status: "verified", last_tested_at: new Date().toISOString() })
-        .eq("id", integration.id);
-    }
+  const nowIso = new Date().toISOString();
 
-    // Must return raw challenge string with 200 OK
+  if (mode === "subscribe" && tokenMatch) {
+    // Record successful verification telemetry
+    await admin
+      .from("integrations")
+      .update({
+        status: "verified",
+        last_tested_at: nowIso,
+        last_webhook_verified_at: nowIso,
+        last_webhook_error: null,
+        webhook_events_received: (integration.webhook_events_received || 0) + 1,
+        webhook_events_processed: (integration.webhook_events_processed || 0) + 1,
+      })
+      .eq("id", integration.id);
+
+    // Return the raw challenge string with text/plain as strictly required by Meta
     return new NextResponse(challenge, {
       status: 200,
       headers: { "Content-Type": "text/plain" },
     });
   }
+
+  // Verification failure
+  await admin
+    .from("integrations")
+    .update({
+      last_webhook_error: "Verification token mismatch during GET challenge",
+      webhook_events_failed: (integration.webhook_events_failed || 0) + 1,
+    })
+    .eq("id", integration.id);
 
   return new NextResponse("Verification token mismatch", { status: 403 });
 }
@@ -68,13 +85,13 @@ export async function POST(
   const { integrationId } = await params;
   const signature = request.headers.get("x-hub-signature-256");
 
-  // Read raw request body string for signature verification
+  // Read raw request body string for signature verification before JSON parsing
   const rawBody = await request.text();
 
   const admin = createAdminClient();
   const { data: integration, error } = await admin
     .from("integrations")
-    .select("id, project_id, encrypted_app_secret")
+    .select("id, project_id, encrypted_app_secret, webhook_events_received, webhook_events_processed, webhook_events_ignored, webhook_events_failed")
     .eq("id", integrationId)
     .maybeSingle();
 
@@ -87,12 +104,28 @@ export async function POST(
   try {
     appSecret = decryptSecret(integration.encrypted_app_secret);
   } catch {
-    return NextResponse.json({ error: "Failed to decrypt secret" }, { status: 500 });
+    await admin
+      .from("integrations")
+      .update({
+        last_webhook_error: "Failed to decrypt integration App Secret for signature validation",
+        webhook_events_failed: (integration.webhook_events_failed || 0) + 1,
+      })
+      .eq("id", integration.id);
+
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 
   // Verify HMAC-SHA256 signature in constant time
   const isSignatureValid = verifyMetaWebhookSignature(rawBody, signature, appSecret);
   if (!isSignatureValid) {
+    await admin
+      .from("integrations")
+      .update({
+        last_webhook_error: "Invalid X-Hub-Signature-256 header",
+        webhook_events_failed: (integration.webhook_events_failed || 0) + 1,
+      })
+      .eq("id", integration.id);
+
     return NextResponse.json({ error: "Invalid X-Hub-Signature-256" }, { status: 401 });
   }
 
@@ -101,10 +134,22 @@ export async function POST(
   try {
     payload = JSON.parse(rawBody);
   } catch {
+    await admin
+      .from("integrations")
+      .update({
+        last_webhook_error: "Malformed JSON payload in webhook body",
+        webhook_events_failed: (integration.webhook_events_failed || 0) + 1,
+      })
+      .eq("id", integration.id);
+
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Process Status Updates
+  const nowIso = new Date().toISOString();
+  let processedCount = 0;
+  let ignoredCount = 0;
+
+  // Process Status Updates and Messages
   const entries = payload?.entry || [];
   for (const entry of entries) {
     const changes = entry?.changes || [];
@@ -125,7 +170,8 @@ export async function POST(
           .maybeSingle();
 
         if (existingEvent) {
-          continue; // Already processed
+          ignoredCount++;
+          continue; // Duplicate event acknowledged idempotently
         }
 
         // Record delivery event
@@ -135,6 +181,8 @@ export async function POST(
           event_type: eventType,
           raw_payload: statusObj,
         });
+
+        processedCount++;
 
         // Update send attempt status if matching
         if (eventType === "delivered" || eventType === "failed") {
@@ -151,6 +199,18 @@ export async function POST(
     }
   }
 
-  // Acknowledge Meta promptly
-  return NextResponse.json({ success: true, received: true });
+  // Update telemetry on integration
+  await admin
+    .from("integrations")
+    .update({
+      last_webhook_received_at: nowIso,
+      last_webhook_error: null,
+      webhook_events_received: (integration.webhook_events_received || 0) + 1,
+      webhook_events_processed: (integration.webhook_events_processed || 0) + processedCount,
+      webhook_events_ignored: (integration.webhook_events_ignored || 0) + ignoredCount,
+    })
+    .eq("id", integration.id);
+
+  // Promptly acknowledge Meta with 200 OK
+  return NextResponse.json({ success: true, received: true, processed: processedCount, ignored: ignoredCount });
 }
