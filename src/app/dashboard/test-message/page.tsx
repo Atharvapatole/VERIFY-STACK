@@ -12,12 +12,29 @@ import {
   Layers,
   ArrowRight,
   Info,
-  Key,
+  RefreshCw,
+  ExternalLink,
+  PlugZap,
+  Check,
 } from "lucide-react";
 
+interface IntegrationOption {
+  id: string;
+  name: string;
+  phone_number_id: string;
+  waba_id?: string;
+  project_id?: string;
+  project_name?: string;
+  template_name?: string;
+  template_language?: string;
+  status: string;
+  is_sandbox?: boolean;
+}
+
 export default function TestMessagePage() {
-  const [integrations, setIntegrations] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [integrations, setIntegrations] = useState<IntegrationOption[]>([]);
+  const [loadingIntegrations, setLoadingIntegrations] = useState(true);
+  const [integrationsError, setIntegrationsError] = useState<string | null>(null);
 
   // Form State
   const [selectedIntegration, setSelectedIntegration] = useState<string>("");
@@ -31,30 +48,55 @@ export default function TestMessagePage() {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorCategory, setErrorCategory] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] = useState<string | null>(null);
+
+  const fetchIntegrations = async () => {
+    setLoadingIntegrations(true);
+    setIntegrationsError(null);
+    try {
+      const res = await fetch("/api/dashboard/integrations");
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to retrieve WhatsApp integrations.");
+      }
+      const list: IntegrationOption[] = data.integrations || [];
+      setIntegrations(list);
+
+      if (list.length > 0) {
+        setSelectedIntegration((prev) => {
+          if (prev && list.some((i) => i.id === prev)) return prev;
+          // Prefer active/verified integrations over disabled
+          const active = list.find((i) => i.status !== "disabled") || list[0];
+          return active.id;
+        });
+      } else {
+        setSelectedIntegration("");
+      }
+    } catch (e: any) {
+      console.error("Error loading integrations for test console:", e);
+      setIntegrationsError(e.message || "An unexpected error occurred while loading integrations.");
+    } finally {
+      setLoadingIntegrations(false);
+    }
+  };
 
   useEffect(() => {
-    async function loadIntegrations() {
-      try {
-        const res = await fetch("/api/v1/integrations");
-        if (res.ok) {
-          const data = await res.json();
-          const list = data.integrations || [];
-          setIntegrations(list);
-          if (list.length > 0) {
-            setSelectedIntegration(list[0].id);
-          }
-        }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadIntegrations();
+    fetchIntegrations();
   }, []);
 
+  const activeIntegration = integrations.find((i) => i.id === selectedIntegration);
+
   const handleTriggerSend = () => {
+    setErrorMsg(null);
+    setErrorCategory(null);
+    setErrorDetails(null);
+
     if (isLiveSend) {
+      if (!selectedIntegration || selectedIntegration === "00000000-0000-0000-0000-000000000000") {
+        setErrorMsg("Please select a connected WhatsApp integration before dispatching live messages.");
+        return;
+      }
       setShowConfirmModal(true);
     } else {
       executeSend();
@@ -66,22 +108,26 @@ export default function TestMessagePage() {
     setSending(true);
     setResult(null);
     setErrorMsg(null);
+    setErrorCategory(null);
+    setErrorDetails(null);
 
     try {
       const res = await fetch("/api/dashboard/test-message", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          integrationId: selectedIntegration || "00000000-0000-0000-0000-000000000000",
-          phone,
-          templateName,
-          templateLanguage,
+          integrationId: isLiveSend ? selectedIntegration : selectedIntegration || null,
+          phone: phone.trim(),
+          templateName: templateName.trim(),
+          templateLanguage: templateLanguage.trim(),
           isLiveSend,
         }),
       });
 
       const data = await res.json();
       if (!res.ok) {
+        setErrorCategory(data.category || null);
+        setErrorDetails(data.details || null);
         throw new Error(data.error || "Failed to dispatch test message.");
       }
 
@@ -105,7 +151,10 @@ export default function TestMessagePage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button
             type="button"
-            onClick={() => setIsLiveSend(false)}
+            onClick={() => {
+              setIsLiveSend(false);
+              setErrorMsg(null);
+            }}
             className={`p-5 rounded-xl border text-left transition-all ${
               !isLiveSend
                 ? "border-amber-500/80 bg-amber-500/10 shadow-lg shadow-amber-500/5"
@@ -125,7 +174,10 @@ export default function TestMessagePage() {
 
           <button
             type="button"
-            onClick={() => setIsLiveSend(true)}
+            onClick={() => {
+              setIsLiveSend(true);
+              setErrorMsg(null);
+            }}
             className={`p-5 rounded-xl border text-left transition-all ${
               isLiveSend
                 ? "border-emerald-500/80 bg-emerald-500/10 shadow-lg shadow-emerald-500/5"
@@ -145,41 +197,126 @@ export default function TestMessagePage() {
         </div>
 
         {/* Live Warning Notice */}
-        {isLiveSend && (
+        {isLiveSend ? (
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-xs text-emerald-300 flex items-start gap-3">
             <Info className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <strong className="font-semibold text-white">Live WhatsApp Delivery Notice:</strong>
+              <p className="text-zinc-300 leading-relaxed">
+                Meta charges authentication conversation rates directly to your Meta Business Manager. Delivery requires an
+                eligible phone number and an approved authentication template in your Meta App.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-xs text-amber-300 flex items-start gap-3">
+            <Sparkles className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
             <div>
-              <strong className="font-semibold text-white">Live WhatsApp Delivery Notice:</strong> Meta charges
-              authentication conversation rates directly to your Meta Business Manager. Delivery requires an eligible phone number
-              and an approved authentication template.
+              <strong className="font-semibold text-white">Isolated Sandbox Simulator:</strong> Testing here simulates
+              the end-to-end OTP challenge generation, token hashing, and audit attempts without calling external Meta Cloud API endpoints.
             </div>
           </div>
         )}
 
         {/* Dispatch Form Card */}
         <div className="rounded-xl border border-zinc-800 bg-[#0f1117] p-6 space-y-6">
-          <h3 className="text-sm font-semibold text-white">Configure Test Dispatch</h3>
+          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-4">
+            <h3 className="text-sm font-semibold text-white">Configure Test Dispatch</h3>
+            <button
+              type="button"
+              onClick={fetchIntegrations}
+              disabled={loadingIntegrations}
+              className="inline-flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white transition-colors"
+              title="Refresh integrations list"
+            >
+              <RefreshCw className={`h-3 w-3 ${loadingIntegrations ? "animate-spin text-emerald-400" : ""}`} />
+              Refresh Integrations
+            </button>
+          </div>
 
-          <div className="space-y-4 text-xs">
+          <div className="space-y-5 text-xs">
+            {/* Live WhatsApp Integration Selector */}
             {isLiveSend && (
-              <div>
-                <label className="block text-zinc-300 font-medium mb-1">Select Connected Integration</label>
-                {integrations.length === 0 ? (
-                  <p className="text-rose-400">
-                    No WhatsApp integrations configured. Please connect your credentials in the Integrations tab before live testing.
-                  </p>
+              <div className="space-y-2">
+                <label className="block text-zinc-300 font-medium">Select Connected WhatsApp Integration</label>
+
+                {loadingIntegrations ? (
+                  <div className="p-4 rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-400 flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4 animate-spin text-emerald-400" />
+                    <span>Loading your WhatsApp credentials...</span>
+                  </div>
+                ) : integrationsError ? (
+                  <div className="p-4 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 space-y-2">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertTriangle className="h-4 w-4 text-rose-400" />
+                      Failed to Load Integrations
+                    </div>
+                    <p className="text-zinc-400">{integrationsError}</p>
+                    <button
+                      type="button"
+                      onClick={fetchIntegrations}
+                      className="px-3 py-1 rounded bg-zinc-900 border border-zinc-700 text-white font-medium hover:bg-zinc-800"
+                    >
+                      Retry Loading
+                    </button>
+                  </div>
+                ) : integrations.length === 0 ? (
+                  <div className="p-5 rounded-lg border border-amber-500/30 bg-amber-500/5 text-amber-300 space-y-3">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <PlugZap className="h-4 w-4 text-amber-400" />
+                      No WhatsApp integrations configured
+                    </div>
+                    <p className="text-zinc-400 leading-relaxed">
+                      Please connect your Meta WhatsApp Cloud API credentials in the Integrations tab before live testing.
+                    </p>
+                    <a
+                      href="/dashboard/integrations"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 text-zinc-950 font-semibold text-xs hover:bg-emerald-400 transition-colors"
+                    >
+                      Connect WhatsApp Account <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
                 ) : (
-                  <select
-                    value={selectedIntegration}
-                    onChange={(e) => setSelectedIntegration(e.target.value)}
-                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
-                  >
-                    {integrations.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name} ({item.phone_number_id})
-                      </option>
-                    ))}
-                  </select>
+                  <div className="space-y-3">
+                    <select
+                      value={selectedIntegration}
+                      onChange={(e) => setSelectedIntegration(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                    >
+                      {integrations.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name} ({item.phone_number_id}) • {item.project_name || "Workspace"} [
+                          {item.status.toUpperCase()}]
+                        </option>
+                      ))}
+                    </select>
+
+                    {/* Selected Integration Info Card */}
+                    {activeIntegration && (
+                      <div className="p-3 rounded-lg border border-zinc-800/80 bg-zinc-950/60 flex flex-wrap items-center justify-between gap-3 text-[11px] text-zinc-400">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-zinc-200">{activeIntegration.name}</span>
+                          <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-[10px] text-emerald-300">
+                            ID: {activeIntegration.phone_number_id}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span>Workspace: <strong className="text-zinc-200">{activeIntegration.project_name || "Default"}</strong></span>
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
+                              activeIntegration.status === "verified"
+                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                                : activeIntegration.status === "disabled"
+                                ? "bg-rose-500/10 text-rose-400 border-rose-500/30"
+                                : "bg-amber-500/10 text-amber-300 border-amber-500/30"
+                            }`}
+                          >
+                            {activeIntegration.status.toUpperCase()}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             )}
@@ -197,7 +334,7 @@ export default function TestMessagePage() {
                 />
               </div>
               <span className="text-[10px] text-zinc-500 mt-1 block">
-                Must include country code and '+' prefix (e.g. +91 9876543210 or +1 4155552671).
+                Must include country code and '+' prefix (e.g. +1 4155552671 or +91 9876543210).
               </span>
             </div>
 
@@ -211,6 +348,9 @@ export default function TestMessagePage() {
                   onChange={(e) => setTemplateName(e.target.value)}
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-white focus:border-emerald-500 focus:outline-none"
                 />
+                <span className="text-[10px] text-zinc-500 mt-1 block">
+                  Must match the approved template name in your Meta WhatsApp Manager.
+                </span>
               </div>
 
               <div>
@@ -222,6 +362,9 @@ export default function TestMessagePage() {
                   onChange={(e) => setTemplateLanguage(e.target.value)}
                   className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-white focus:border-emerald-500 focus:outline-none"
                 />
+                <span className="text-[10px] text-zinc-500 mt-1 block">
+                  e.g. en_US, en_GB, es_ES, or hi_IN.
+                </span>
               </div>
             </div>
 
@@ -229,7 +372,7 @@ export default function TestMessagePage() {
               <button
                 type="button"
                 onClick={handleTriggerSend}
-                disabled={sending}
+                disabled={sending || (isLiveSend && (!selectedIntegration || integrations.length === 0))}
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-emerald-400 transition-colors disabled:opacity-50 shadow-sm shadow-emerald-500/20"
               >
                 <SendHorizontal className="h-4 w-4" />
@@ -246,7 +389,17 @@ export default function TestMessagePage() {
               <AlertTriangle className="h-4 w-4 text-rose-400" />
               Delivery Request Failed
             </div>
+            {errorCategory && (
+              <div className="font-semibold text-rose-200">
+                Category: <span className="font-mono">{errorCategory}</span>
+              </div>
+            )}
             <p className="text-zinc-300">{errorMsg}</p>
+            {errorDetails && (
+              <p className="text-[11px] text-zinc-400 bg-zinc-950 p-2.5 rounded border border-rose-500/20 font-mono">
+                {errorDetails}
+              </p>
+            )}
           </div>
         )}
 
@@ -289,12 +442,21 @@ export default function TestMessagePage() {
                 Confirm Live WhatsApp Dispatch
               </div>
               <p className="text-zinc-300 leading-relaxed">
-                You are about to dispatch a live message to <code className="text-white font-mono">{phone}</code> via your connected Meta WhatsApp Cloud API integration.
+                You are about to dispatch a live message to <code className="text-white font-mono">{phone}</code> via your connected Meta WhatsApp Cloud API integration:
               </p>
+
+              {activeIntegration && (
+                <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950 space-y-1 text-[11px]">
+                  <div className="text-white font-semibold">{activeIntegration.name}</div>
+                  <div className="text-zinc-400 font-mono">Phone Number ID: {activeIntegration.phone_number_id}</div>
+                  <div className="text-zinc-400">Workspace: {activeIntegration.project_name || "Default Project"}</div>
+                </div>
+              )}
+
               <ul className="list-disc pl-5 text-zinc-400 space-y-1 text-[11px]">
                 <li>Meta conversation pricing rules and template approval requirements apply.</li>
                 <li>Your Meta Business Manager will record and bill for this outbound message.</li>
-                <li>This is NOT a simulated mock send.</li>
+                <li>This is a REAL outbound message sent through Meta WhatsApp Cloud API.</li>
               </ul>
               <div className="pt-2 flex items-center justify-end gap-3">
                 <button

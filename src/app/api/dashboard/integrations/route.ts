@@ -35,11 +35,22 @@ export async function GET(request: NextRequest) {
   }
 
   const admin = createAdminClient();
-  const { data: integrations, error } = await admin
+
+  // 1. Fetch all projects owned by the user
+  const { data: userProjects } = await admin
+    .from("projects")
+    .select("id, name")
+    .eq("user_id", user.id);
+
+  const projectIds = (userProjects || []).map((p) => p.id);
+
+  // 2. Query integrations owned directly by user OR belonging to their authorized projects
+  let query = admin
     .from("integrations")
     .select(`
       id,
       project_id,
+      user_id,
       name,
       phone_number_id,
       waba_id,
@@ -58,24 +69,27 @@ export async function GET(request: NextRequest) {
       webhook_events_failed,
       created_at,
       updated_at
-    `)
-    .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+    `);
+
+  if (projectIds.length > 0) {
+    query = query.or(`user_id.eq.${user.id},project_id.in.(${projectIds.join(",")})`);
+  } else {
+    query = query.eq("user_id", user.id);
+  }
+
+  const { data: integrations, error } = await query.order("created_at", { ascending: false });
 
   if (error) {
     return NextResponse.json({ error: "Failed to fetch integrations" }, { status: 500 });
   }
 
-  const projectIds = Array.from(new Set((integrations || []).map((i) => i.project_id).filter(Boolean)));
-  const { data: projects } = projectIds.length > 0
-    ? await admin.from("projects").select("id, name").in("id", projectIds)
-    : { data: [] };
+  const allProjects = userProjects || [];
 
   const sanitizedIntegrations = (integrations || []).map((item) => {
-    const proj = projects?.find((p) => p.id === item.project_id);
+    const proj = allProjects.find((p) => p.id === item.project_id);
     return {
       ...item,
-      project_name: proj?.name || "Project",
+      project_name: proj?.name || "Project Workspace",
       // Never expose stored verification tokens in plaintext after initial creation
       webhook_verify_token: item.webhook_verify_token ? "whsec_••••••••••••••••••••••••" : null,
       has_webhook_verify_token: Boolean(item.webhook_verify_token),
