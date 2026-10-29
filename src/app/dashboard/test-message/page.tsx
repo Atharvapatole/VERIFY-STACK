@@ -16,6 +16,10 @@ import {
   ExternalLink,
   PlugZap,
   Check,
+  FileCode,
+  Tag,
+  Clock,
+  XCircle,
 } from "lucide-react";
 
 interface IntegrationOption {
@@ -31,6 +35,15 @@ interface IntegrationOption {
   is_sandbox?: boolean;
 }
 
+interface MetaMessageTemplate {
+  id?: string;
+  name: string;
+  status: string; // APPROVED, PENDING, REJECTED, PAUSED, etc.
+  category: string; // AUTHENTICATION, UTILITY, MARKETING
+  language: string;
+  components?: any[];
+}
+
 export default function TestMessagePage() {
   const [integrations, setIntegrations] = useState<IntegrationOption[]>([]);
   const [loadingIntegrations, setLoadingIntegrations] = useState(true);
@@ -39,9 +52,18 @@ export default function TestMessagePage() {
   // Form State
   const [selectedIntegration, setSelectedIntegration] = useState<string>("");
   const [phone, setPhone] = useState("+14155552671");
+  const [isLiveSend, setIsLiveSend] = useState(false);
+
+  // Template Discovery State
+  const [templates, setTemplates] = useState<MetaMessageTemplate[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState<string>("");
+
+  // Raw template parameters (for sandbox or active selection)
   const [templateName, setTemplateName] = useState("otp_authentication");
   const [templateLanguage, setTemplateLanguage] = useState("en_US");
-  const [isLiveSend, setIsLiveSend] = useState(false);
+  const [selectedTemplateComponents, setSelectedTemplateComponents] = useState<any[] | undefined>(undefined);
 
   // Execution & Confirmation
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -51,6 +73,7 @@ export default function TestMessagePage() {
   const [errorCategory, setErrorCategory] = useState<string | null>(null);
   const [errorDetails, setErrorDetails] = useState<string | null>(null);
 
+  // 1. Fetch Integrations
   const fetchIntegrations = async () => {
     setLoadingIntegrations(true);
     setIntegrationsError(null);
@@ -66,7 +89,6 @@ export default function TestMessagePage() {
       if (list.length > 0) {
         setSelectedIntegration((prev) => {
           if (prev && list.some((i) => i.id === prev)) return prev;
-          // Prefer active/verified integrations over disabled
           const active = list.find((i) => i.status !== "disabled") || list[0];
           return active.id;
         });
@@ -81,11 +103,106 @@ export default function TestMessagePage() {
     }
   };
 
+  // 2. Fetch Templates from Meta WABA for Selected Integration
+  const fetchTemplates = async (integrationId: string) => {
+    if (!integrationId) {
+      setTemplates([]);
+      return;
+    }
+
+    setLoadingTemplates(true);
+    setTemplatesError(null);
+
+    try {
+      const res = await fetch(`/api/dashboard/integrations/${integrationId}/templates`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to retrieve message templates from Meta WABA.");
+      }
+
+      const list: MetaMessageTemplate[] = data.templates || [];
+      setTemplates(list);
+
+      // Auto-select template:
+      const currentIntegration = integrations.find((i) => i.id === integrationId);
+      const configuredName = currentIntegration?.template_name;
+      const configuredLang = currentIntegration?.template_language;
+
+      const matchingConfigured = list.find(
+        (t) =>
+          t.name.toLowerCase() === configuredName?.toLowerCase() &&
+          t.language.toLowerCase() === configuredLang?.toLowerCase() &&
+          t.status === "APPROVED"
+      );
+
+      const approvedAuth = list.find(
+        (t) => t.category?.toUpperCase() === "AUTHENTICATION" && t.status === "APPROVED"
+      );
+
+      const approvedAny = list.find((t) => t.status === "APPROVED");
+
+      const chosen = matchingConfigured || approvedAuth || approvedAny;
+
+      if (chosen) {
+        const key = `${chosen.name}:::${chosen.language}`;
+        setSelectedTemplateKey(key);
+        setTemplateName(chosen.name);
+        setTemplateLanguage(chosen.language);
+        setSelectedTemplateComponents(chosen.components);
+      } else if (list.length > 0) {
+        const first = list[0];
+        const key = `${first.name}:::${first.language}`;
+        setSelectedTemplateKey(key);
+        setTemplateName(first.name);
+        setTemplateLanguage(first.language);
+        setSelectedTemplateComponents(first.components);
+      } else {
+        setSelectedTemplateKey("");
+        setTemplateName("");
+        setTemplateLanguage("");
+        setSelectedTemplateComponents(undefined);
+      }
+    } catch (err: any) {
+      console.error("Failed to load templates from Meta:", err);
+      setTemplatesError(err.message || "Failed to load templates from Meta.");
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
   useEffect(() => {
     fetchIntegrations();
   }, []);
 
+  // When live send is activated or integration selection changes, reload templates
+  useEffect(() => {
+    if (isLiveSend && selectedIntegration) {
+      fetchTemplates(selectedIntegration);
+    } else if (!isLiveSend) {
+      setTemplateName("sandbox_otp");
+      setTemplateLanguage("en_US");
+      setSelectedTemplateComponents(undefined);
+    }
+  }, [isLiveSend, selectedIntegration]);
+
   const activeIntegration = integrations.find((i) => i.id === selectedIntegration);
+
+  const activeTemplate = templates.find(
+    (t) => `${t.name}:::${t.language}` === selectedTemplateKey
+  );
+
+  const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
+
+  const handleTemplateSelect = (key: string) => {
+    setSelectedTemplateKey(key);
+    const found = templates.find((t) => `${t.name}:::${t.language}` === key);
+    if (found) {
+      setTemplateName(found.name);
+      setTemplateLanguage(found.language);
+      setSelectedTemplateComponents(found.components);
+    }
+  };
 
   const handleTriggerSend = () => {
     setErrorMsg(null);
@@ -95,6 +212,16 @@ export default function TestMessagePage() {
     if (isLiveSend) {
       if (!selectedIntegration || selectedIntegration === "00000000-0000-0000-0000-000000000000") {
         setErrorMsg("Please select a connected WhatsApp integration before dispatching live messages.");
+        return;
+      }
+      if (!templateName || !templateLanguage) {
+        setErrorMsg("Please select an approved message template from your WhatsApp Business Account.");
+        return;
+      }
+      if (activeTemplate && activeTemplate.status !== "APPROVED") {
+        setErrorMsg(
+          `The selected template '${activeTemplate.name}' is currently in '${activeTemplate.status}' status. Meta will only deliver messages using APPROVED templates.`
+        );
         return;
       }
       setShowConfirmModal(true);
@@ -120,6 +247,7 @@ export default function TestMessagePage() {
           phone: phone.trim(),
           templateName: templateName.trim(),
           templateLanguage: templateLanguage.trim(),
+          templateComponents: isLiveSend ? selectedTemplateComponents : undefined,
           isLiveSend,
         }),
       });
@@ -138,6 +266,11 @@ export default function TestMessagePage() {
       setSending(false);
     }
   };
+
+  // Helper to detect button configuration
+  const hasButtonDetected = Boolean(
+    selectedTemplateComponents?.find((c: any) => c.type?.toUpperCase() === "BUTTONS")?.buttons?.length > 0
+  );
 
   return (
     <div className="flex-1 flex flex-col">
@@ -297,8 +430,13 @@ export default function TestMessagePage() {
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-zinc-200">{activeIntegration.name}</span>
                           <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-[10px] text-emerald-300">
-                            ID: {activeIntegration.phone_number_id}
+                            Phone ID: {activeIntegration.phone_number_id}
                           </span>
+                          {activeIntegration.waba_id && (
+                            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-[10px] text-zinc-400">
+                              WABA: {activeIntegration.waba_id}
+                            </span>
+                          )}
                         </div>
                         <div className="flex items-center gap-2">
                           <span>Workspace: <strong className="text-zinc-200">{activeIntegration.project_name || "Default"}</strong></span>
@@ -321,6 +459,186 @@ export default function TestMessagePage() {
               </div>
             )}
 
+            {/* LIVE TEMPLATE DISCOVERY & SELECTION SECTION */}
+            {isLiveSend ? (
+              <div className="space-y-3 pt-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-zinc-300 font-medium flex items-center gap-1.5">
+                    <FileCode className="h-3.5 w-3.5 text-emerald-400" />
+                    Meta WABA Message Template
+                  </label>
+                  {selectedIntegration && (
+                    <button
+                      type="button"
+                      onClick={() => fetchTemplates(selectedIntegration)}
+                      disabled={loadingTemplates}
+                      className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 transition-colors"
+                    >
+                      <RefreshCw className={`h-3 w-3 ${loadingTemplates ? "animate-spin" : ""}`} />
+                      Refresh Templates from Meta
+                    </button>
+                  )}
+                </div>
+
+                {loadingTemplates ? (
+                  <div className="p-4 rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-400 flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4 animate-spin text-emerald-400" />
+                    <span>Loading approved templates from Meta WhatsApp Business Account...</span>
+                  </div>
+                ) : templatesError ? (
+                  <div className="p-4 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-300 space-y-2">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertTriangle className="h-4 w-4 text-rose-400" />
+                      Failed to Retrieve Templates from Meta
+                    </div>
+                    <p className="text-zinc-400">{templatesError}</p>
+                    <p className="text-[11px] text-amber-300">
+                      💡 Tip: Verify your Meta System User token has the{" "}
+                      <code className="text-amber-200 font-mono">whatsapp_business_management</code> permission in addition to{" "}
+                      <code className="text-amber-200 font-mono">whatsapp_business_messaging</code>.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => fetchTemplates(selectedIntegration)}
+                      className="px-3 py-1 rounded bg-zinc-900 border border-zinc-700 text-white font-medium hover:bg-zinc-800 text-xs"
+                    >
+                      Retry Loading Templates
+                    </button>
+                  </div>
+                ) : templates.length === 0 ? (
+                  <div className="p-4 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 space-y-2">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertTriangle className="h-4 w-4 text-amber-400" />
+                      No Message Templates Found in Connected WABA
+                    </div>
+                    <p className="text-zinc-400 leading-relaxed">
+                      Your Meta WhatsApp Business Account (WABA ID: <code className="text-zinc-200 font-mono">{activeIntegration?.waba_id}</code>) has no templates. WhatsApp Cloud API requires pre-approved templates for outbound message delivery.
+                    </p>
+                    <div className="pt-1">
+                      <a
+                        href="https://business.facebook.com/wa/manage/message-templates/"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500 text-zinc-950 font-semibold text-xs hover:bg-emerald-400 transition-colors"
+                      >
+                        Create Authentication Template in WhatsApp Manager <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <select
+                      value={selectedTemplateKey}
+                      onChange={(e) => handleTemplateSelect(e.target.value)}
+                      className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                    >
+                      {approvedTemplates.length > 0 && (
+                        <optgroup label="Approved Templates (Ready to Send)">
+                          {approvedTemplates.map((t) => (
+                            <option key={`${t.name}:::${t.language}`} value={`${t.name}:::${t.language}`}>
+                              [APPROVED] {t.name} ({t.language}) • {t.category}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+
+                      {templates.some((t) => t.status !== "APPROVED") && (
+                        <optgroup label="Other Templates (Not Approved / In Review)">
+                          {templates
+                            .filter((t) => t.status !== "APPROVED")
+                            .map((t) => (
+                              <option
+                                key={`${t.name}:::${t.language}`}
+                                value={`${t.name}:::${t.language}`}
+                                className="text-zinc-500"
+                              >
+                                [{t.status}] {t.name} ({t.language}) • {t.category}
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                    </select>
+
+                    {/* Active Template Meta Details Card */}
+                    {activeTemplate && (
+                      <div className="p-3 rounded-lg border border-zinc-800/80 bg-zinc-950/60 space-y-2 text-[11px]">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-zinc-200">{activeTemplate.name}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-zinc-400 text-[10px]">
+                              Language: {activeTemplate.language}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[10px]">
+                              {activeTemplate.category}
+                            </span>
+                          </div>
+
+                          <div>
+                            {activeTemplate.status === "APPROVED" ? (
+                              <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold flex items-center gap-1 text-[10px]">
+                                <Check className="h-3 w-3" /> APPROVED
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 font-semibold flex items-center gap-1 text-[10px]">
+                                <Clock className="h-3 w-3" /> {activeTemplate.status}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-zinc-400 flex items-center gap-2">
+                          <span>Payload Configuration:</span>
+                          <span className="text-emerald-400 font-mono">1 body variable (OTP code)</span>
+                          {hasButtonDetected && (
+                            <span className="text-amber-400 font-mono">• OTP Copy Code button detected</span>
+                          )}
+                        </div>
+
+                        {activeTemplate.status !== "APPROVED" && (
+                          <div className="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[10px]">
+                            ⚠️ This template is currently <strong>{activeTemplate.status}</strong>. Meta will reject live dispatch with error #132001 until it is APPROVED.
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* SANDBOX SIMULATOR TEMPLATE CONFIG */
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">Simulated Template Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={templateName}
+                    onChange={(e) => setTemplateName(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-white focus:border-emerald-500 focus:outline-none"
+                    placeholder="sandbox_otp"
+                  />
+                  <span className="text-[10px] text-zinc-500 mt-1 block">
+                    Arbitrary template name for sandbox simulation test runs.
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-zinc-300 font-medium mb-1">Simulated Language Code</label>
+                  <input
+                    type="text"
+                    required
+                    value={templateLanguage}
+                    onChange={(e) => setTemplateLanguage(e.target.value)}
+                    className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-white focus:border-emerald-500 focus:outline-none"
+                    placeholder="en_US"
+                  />
+                  <span className="text-[10px] text-zinc-500 mt-1 block">
+                    e.g. en_US, en_GB, es_ES, or hi_IN.
+                  </span>
+                </div>
+              </div>
+            )}
+
             <div>
               <label className="block text-zinc-300 font-medium mb-1">Destination Phone Number (E.164 Format)</label>
               <div className="flex items-center gap-2">
@@ -338,41 +656,14 @@ export default function TestMessagePage() {
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-zinc-300 font-medium mb-1">Authentication Template Name</label>
-                <input
-                  type="text"
-                  required
-                  value={templateName}
-                  onChange={(e) => setTemplateName(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-white focus:border-emerald-500 focus:outline-none"
-                />
-                <span className="text-[10px] text-zinc-500 mt-1 block">
-                  Must match the approved template name in your Meta WhatsApp Manager.
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-zinc-300 font-medium mb-1">Language Code</label>
-                <input
-                  type="text"
-                  required
-                  value={templateLanguage}
-                  onChange={(e) => setTemplateLanguage(e.target.value)}
-                  className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-white focus:border-emerald-500 focus:outline-none"
-                />
-                <span className="text-[10px] text-zinc-500 mt-1 block">
-                  e.g. en_US, en_GB, es_ES, or hi_IN.
-                </span>
-              </div>
-            </div>
-
             <div className="pt-2">
               <button
                 type="button"
                 onClick={handleTriggerSend}
-                disabled={sending || (isLiveSend && (!selectedIntegration || integrations.length === 0))}
+                disabled={
+                  sending ||
+                  (isLiveSend && (!selectedIntegration || integrations.length === 0 || (activeTemplate && activeTemplate.status !== "APPROVED")))
+                }
                 className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-emerald-400 transition-colors disabled:opacity-50 shadow-sm shadow-emerald-500/20"
               >
                 <SendHorizontal className="h-4 w-4" />
@@ -394,7 +685,7 @@ export default function TestMessagePage() {
                 Category: <span className="font-mono">{errorCategory}</span>
               </div>
             )}
-            <p className="text-zinc-300">{errorMsg}</p>
+            <p className="text-zinc-300 leading-relaxed">{errorMsg}</p>
             {errorDetails && (
               <p className="text-[11px] text-zinc-400 bg-zinc-950 p-2.5 rounded border border-rose-500/20 font-mono">
                 {errorDetails}
@@ -445,13 +736,18 @@ export default function TestMessagePage() {
                 You are about to dispatch a live message to <code className="text-white font-mono">{phone}</code> via your connected Meta WhatsApp Cloud API integration:
               </p>
 
-              {activeIntegration && (
-                <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950 space-y-1 text-[11px]">
-                  <div className="text-white font-semibold">{activeIntegration.name}</div>
-                  <div className="text-zinc-400 font-mono">Phone Number ID: {activeIntegration.phone_number_id}</div>
-                  <div className="text-zinc-400">Workspace: {activeIntegration.project_name || "Default Project"}</div>
+              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950 space-y-1.5 text-[11px]">
+                {activeIntegration && (
+                  <>
+                    <div className="text-white font-semibold">{activeIntegration.name}</div>
+                    <div className="text-zinc-400 font-mono">Phone Number ID: {activeIntegration.phone_number_id}</div>
+                    <div className="text-zinc-400">Workspace: {activeIntegration.project_name || "Default Project"}</div>
+                  </>
+                )}
+                <div className="border-t border-zinc-800 pt-1.5 text-emerald-300 font-mono">
+                  Template: {templateName} ({templateLanguage})
                 </div>
-              )}
+              </div>
 
               <ul className="list-disc pl-5 text-zinc-400 space-y-1 text-[11px]">
                 <li>Meta conversation pricing rules and template approval requirements apply.</li>

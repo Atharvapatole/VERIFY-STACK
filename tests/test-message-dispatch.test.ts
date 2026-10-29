@@ -4,12 +4,13 @@ import crypto from "node:crypto";
 import { encryptSecret, decryptSecret } from "../src/lib/crypto/aes";
 import { formatPhoneForMeta, buildAuthenticationPayload } from "../src/lib/whatsapp/meta-provider";
 
-// Test Schema
+// Test Schema matching updated route
 const testSendSchema = z.object({
   integrationId: z.string().uuid().optional().nullable(),
   phone: z.string().regex(/^\+[1-9]\d{7,14}$/, "Must be valid E.164 phone number (e.g. +14155552671)"),
-  templateName: z.string().min(1, "Template name is required").default("otp_authentication"),
-  templateLanguage: z.string().min(2, "Language code is required").default("en_US"),
+  templateName: z.string().min(1, "Template name is required"),
+  templateLanguage: z.string().min(2, "Language code is required"),
+  templateComponents: z.array(z.any()).optional(),
   isLiveSend: z.boolean().default(false),
 });
 
@@ -149,7 +150,12 @@ describe("Verify Stack Test Message Console & Live Dispatch Verification", () =>
   ) => {
     if (!authUser) return { status: 401, error: "Unauthorized" };
 
-    const parsed = testSendSchema.safeParse(payload);
+    const fullPayload = {
+      templateName: "test_template",
+      templateLanguage: "en_US",
+      ...payload,
+    };
+    const parsed = testSendSchema.safeParse(fullPayload);
     if (!parsed.success) {
       return { status: 422, error: parsed.error.errors[0]?.message };
     }
@@ -370,6 +376,8 @@ describe("Verify Stack Test Message Console & Live Dispatch Verification", () =>
   it("executes Sandbox simulation successfully without requiring an integration ID", async () => {
     const res = await dispatchTestMessage(userA, {
       phone: "+14155552671",
+      templateName: "sandbox_otp",
+      templateLanguage: "en_US",
       isLiveSend: false,
     });
 
@@ -386,6 +394,8 @@ describe("Verify Stack Test Message Console & Live Dispatch Verification", () =>
       {
         integrationId: "aaaa1111-1111-1111-1111-111111111111",
         phone: "+14155552671",
+        templateName: "otp_authentication",
+        templateLanguage: "en_US",
         isLiveSend: true,
       },
       {
@@ -401,5 +411,21 @@ describe("Verify Stack Test Message Console & Live Dispatch Verification", () =>
     expect(res.success).toBe(false);
     expect(res.category).toBe("Authentication Template Not Found or Not Approved");
     expect(res.error).toContain("Authentication Template Not Found or Not Approved");
+  });
+
+  // 11. Custom template support (no hardcoded assumption)
+  it("allows sending with any custom template name and language returned by Meta", async () => {
+    const res = await dispatchTestMessage(userA, {
+      integrationId: "aaaa1111-1111-1111-1111-111111111111",
+      phone: "+14155552671",
+      templateName: "custom_brand_otp",
+      templateLanguage: "hi",
+      templateComponents: [{ type: "BODY", text: "OTP: {{1}}" }],
+      isLiveSend: true,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.success).toBe(true);
+    expect(res.mode).toBe("live_meta_api");
   });
 });

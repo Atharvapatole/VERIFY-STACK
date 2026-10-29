@@ -11,8 +11,9 @@ import { ensureUserProfile } from "@/lib/user-profile";
 const testSendSchema = z.object({
   integrationId: z.string().uuid().optional().nullable(),
   phone: z.string().regex(/^\+[1-9]\d{7,14}$/, "Must be valid E.164 phone number (e.g. +14155552671)"),
-  templateName: z.string().min(1, "Template name is required").default("otp_authentication"),
-  templateLanguage: z.string().min(2, "Language code is required").default("en_US"),
+  templateName: z.string().min(1, "Template name is required"),
+  templateLanguage: z.string().min(2, "Language code is required"),
+  templateComponents: z.array(z.any()).optional(),
   isLiveSend: z.boolean().default(false),
 });
 
@@ -44,7 +45,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.errors[0]?.message }, { status: 422 });
   }
 
-  const { integrationId, phone, templateName, templateLanguage, isLiveSend } = parsed.data;
+  const { integrationId, phone, templateName, templateLanguage, templateComponents, isLiveSend } = parsed.data;
 
   // Rate limit test message sends to 3/min per destination phone
   const rateLimit = await checkPhoneSendRateLimit(phone);
@@ -271,6 +272,7 @@ export async function POST(request: NextRequest) {
       templateName,
       templateLanguage,
       otpCode: testOtp,
+      templateComponents,
     });
 
     if (challenge) {
@@ -317,8 +319,10 @@ export async function POST(request: NextRequest) {
         rawMsg.includes("not in allowed list")
       ) {
         failureCategory = "Recipient Phone Number Not Allowed in Meta Development Mode";
-      } else if (code === 132001 || rawMsg.includes("template")) {
-        failureCategory = "Authentication Template Not Found or Not Approved";
+      } else if (code === 132001 || rawMsg.includes("Template name does not exist") || rawMsg.includes("template")) {
+        failureCategory = "Authentication Template Not Found or Not Approved in WABA";
+      } else if (code === 100 && (rawMsg.includes("button") || rawMsg.includes("parameter"))) {
+        failureCategory = "Template Parameter or Button Component Mismatch";
       } else if (code === 131000 || rawMsg.includes("permission")) {
         failureCategory = "Missing whatsapp_business_messaging Permission";
       }
