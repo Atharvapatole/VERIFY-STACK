@@ -3,6 +3,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { Database } from "@/lib/supabase/types";
 
 export async function middleware(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // Fast-path bypass for Meta Webhook callbacks: Never touch cookies or auth checks
+  if (pathname.startsWith("/api/webhooks")) {
+    return NextResponse.next();
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -37,8 +44,6 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
 
   // Protect Dashboard Routes
   if (pathname.startsWith("/dashboard")) {

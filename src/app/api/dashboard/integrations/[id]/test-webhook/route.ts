@@ -5,6 +5,7 @@ import { decryptSecret } from "@/lib/crypto/aes";
 import { verifyMetaWebhookSignature } from "@/lib/crypto/signature";
 import crypto from "node:crypto";
 import { env } from "@/lib/env";
+import { getCanonicalAppUrl } from "@/lib/base-url";
 
 export async function POST(
   request: NextRequest,
@@ -93,7 +94,7 @@ export async function POST(
   }
 
   // 4. Webhook URL format
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || env.NEXT_PUBLIC_APP_URL || "https://verifystack-lyart.vercel.app";
+  const baseUrl = getCanonicalAppUrl();
   const expectedUrl = `${baseUrl.replace(/\/$/, "")}/api/webhooks/whatsapp/${integration.id}`;
 
   const allPassed = Object.values(diagnostics).every((d) => d.status === "passed");

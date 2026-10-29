@@ -24,6 +24,7 @@ import {
   ShieldAlert,
   Layers,
 } from "lucide-react";
+import { getCanonicalAppUrl, CANONICAL_PRODUCTION_URL } from "@/lib/base-url";
 
 interface IntegrationItem {
   id: string;
@@ -104,12 +105,8 @@ export default function IntegrationsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Production base URL resolution
-  const appBaseUrl =
-    process.env.NEXT_PUBLIC_APP_URL ||
-    (typeof window !== "undefined" && window.location.origin.includes("vercel.app")
-      ? window.location.origin
-      : "https://verifystack-lyart.vercel.app");
+  // Production base URL resolution enforced via canonical base URL helper
+  const appBaseUrl = getCanonicalAppUrl();
 
   const fetchIntegrations = async () => {
     try {
@@ -282,7 +279,7 @@ export default function IntegrationsPage() {
         id: modalDraft.id,
         name: formData.name,
         webhookUrl: generatedUrl,
-        verifyToken: modalDraft.verifyToken,
+        verifyToken: resData.raw_webhook_verify_token || modalDraft.verifyToken,
       });
 
       fetchIntegrations();
@@ -363,17 +360,31 @@ export default function IntegrationsPage() {
         </div>
 
         {/* Integration Header Controls */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
             <h2 className="text-sm font-semibold text-white">Connected Providers</h2>
             <p className="text-xs text-zinc-400">View callback URLs, verification tokens, and live telemetry for your integrations.</p>
           </div>
-          <button
-            onClick={openConnectModal}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 py-1.5 text-xs font-medium text-zinc-950 hover:bg-emerald-400 transition-colors shadow-sm shadow-emerald-500/20"
-          >
-            <Plus className="h-3.5 w-3.5" /> Connect WhatsApp Account
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                setLoading(true);
+                fetchIntegrations();
+              }}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors disabled:opacity-50"
+              title="Refresh integrations list and live webhook verification status"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin text-emerald-400" : ""}`} />
+              Refresh Status
+            </button>
+            <button
+              onClick={openConnectModal}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3.5 py-1.5 text-xs font-medium text-zinc-950 hover:bg-emerald-400 transition-colors shadow-sm shadow-emerald-500/20"
+            >
+              <Plus className="h-3.5 w-3.5" /> Connect WhatsApp Account
+            </button>
+          </div>
         </div>
 
         {/* Rotated Token One-Time Alert Modal / Card */}
@@ -509,7 +520,7 @@ export default function IntegrationsPage() {
                           {webhookUrl}
                         </div>
                         <p className="text-[10px] text-zinc-500 leading-relaxed">
-                          Enter this exact URL into Meta App Dashboard → WhatsApp → Configuration. Notice that the URL ends with this integration&apos;s unique ID.
+                          Enter this exact URL into Meta App Dashboard → WhatsApp → Configuration. Ensure the domain is strictly <span className="text-zinc-300 font-mono">verifystack-lyart.vercel.app</span> (do not omit <span className="text-emerald-400 font-mono">-lyart</span>).
                         </p>
                       </div>
 
@@ -744,6 +755,9 @@ export default function IntegrationsPage() {
                       <div className="p-2.5 rounded bg-zinc-900 border border-zinc-800 font-mono text-emerald-300 text-xs break-all select-all">
                         {newlyCreatedData.webhookUrl}
                       </div>
+                      <p className="text-[10px] text-zinc-400">
+                        Notice: The canonical domain is <strong className="text-zinc-200 font-mono">verifystack-lyart.vercel.app</strong>. Do NOT omit the <code className="text-emerald-400 font-mono">-lyart</code> suffix in Meta Developers.
+                      </p>
                     </div>
 
                     {/* Token */}
@@ -880,6 +894,9 @@ export default function IntegrationsPage() {
                           <div className="p-2 rounded bg-[#090a0d] border border-zinc-800 text-emerald-300 font-mono text-[11px] break-all select-all">
                             {draftWebhookUrl}
                           </div>
+                          <span className="text-[10px] text-zinc-400 block">
+                            Ensure you copy this full URL including <code className="text-emerald-400 font-mono">verifystack-lyart.vercel.app</code> and your integration ID.
+                          </span>
                         </div>
 
                         {/* Verification Token */}
