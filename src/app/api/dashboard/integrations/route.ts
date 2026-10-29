@@ -59,12 +59,21 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to fetch integrations" }, { status: 500 });
   }
 
-  const sanitizedIntegrations = (integrations || []).map((item) => ({
-    ...item,
-    // Never expose stored verification tokens in plaintext after initial creation
-    webhook_verify_token: item.webhook_verify_token ? "whsec_••••••••••••••••••••••••" : null,
-    has_webhook_verify_token: Boolean(item.webhook_verify_token),
-  }));
+  const projectIds = Array.from(new Set((integrations || []).map((i) => i.project_id).filter(Boolean)));
+  const { data: projects } = projectIds.length > 0
+    ? await admin.from("projects").select("id, name").in("id", projectIds)
+    : { data: [] };
+
+  const sanitizedIntegrations = (integrations || []).map((item) => {
+    const proj = projects?.find((p) => p.id === item.project_id);
+    return {
+      ...item,
+      project_name: proj?.name || "Project",
+      // Never expose stored verification tokens in plaintext after initial creation
+      webhook_verify_token: item.webhook_verify_token ? "whsec_••••••••••••••••••••••••" : null,
+      has_webhook_verify_token: Boolean(item.webhook_verify_token),
+    };
+  });
 
   return NextResponse.json({
     integrations: sanitizedIntegrations,

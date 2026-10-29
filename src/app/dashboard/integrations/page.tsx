@@ -22,11 +22,13 @@ import {
   RotateCcw,
   KeyRound,
   ShieldAlert,
+  Layers,
 } from "lucide-react";
 
 interface IntegrationItem {
   id: string;
   project_id: string;
+  project_name?: string;
   name: string;
   phone_number_id: string;
   waba_id: string;
@@ -46,11 +48,23 @@ interface IntegrationItem {
   created_at: string;
 }
 
+interface ProjectItem {
+  id: string;
+  name: string;
+  slug: string;
+  is_default: boolean;
+}
+
 export default function IntegrationsPage() {
   const [integrations, setIntegrations] = useState<IntegrationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  // Projects state
+  const [projects, setProjects] = useState<ProjectItem[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [loadingProjects, setLoadingProjects] = useState<boolean>(false);
 
   // Diagnostic state
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -111,8 +125,32 @@ export default function IntegrationsPage() {
     }
   };
 
+  const fetchProjects = async () => {
+    setLoadingProjects(true);
+    try {
+      const res = await fetch("/api/dashboard/projects");
+      if (res.ok) {
+        const data = await res.json();
+        const list: ProjectItem[] = data.projects || [];
+        setProjects(list);
+        if (list.length > 0) {
+          setSelectedProjectId((prev) => {
+            if (prev && list.some((p) => p.id === prev)) return prev;
+            const def = list.find((p) => p.is_default) || list[0];
+            return def.id;
+          });
+        }
+      }
+    } catch (e) {
+      console.error("Failed to load projects", e);
+    } finally {
+      setLoadingProjects(false);
+    }
+  };
+
   useEffect(() => {
     fetchIntegrations();
+    fetchProjects();
   }, []);
 
   const handleCopy = (text: string, id: string) => {
@@ -121,7 +159,11 @@ export default function IntegrationsPage() {
     setTimeout(() => setCopiedKey(null), 2500);
   };
 
-  const openConnectModal = () => {
+  const openConnectModal = async () => {
+    if (projects.length === 0) {
+      await fetchProjects();
+    }
+
     // Generate secure pre-allocated UUID
     let newId = "";
     if (typeof crypto !== "undefined" && crypto.randomUUID) {
@@ -210,28 +252,22 @@ export default function IntegrationsPage() {
     e.preventDefault();
     if (!modalDraft) return;
 
+    if (!selectedProjectId) {
+      setFormError("Please select a valid target project for this integration.");
+      return;
+    }
+
     setSubmitting(true);
     setFormError(null);
 
     try {
-      const projRes = await fetch("/api/v1/usage");
-      let projectId = "";
-      if (projRes.ok) {
-        const pData = await projRes.json();
-        projectId = pData.project_id;
-      }
-
-      if (!projectId) {
-        projectId = "00000000-0000-0000-0000-000000000000";
-      }
-
       const res = await fetch("/api/dashboard/integrations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: modalDraft.id,
           webhookVerifyToken: modalDraft.verifyToken,
-          projectId,
+          projectId: selectedProjectId,
           ...formData,
         }),
       });
@@ -418,7 +454,7 @@ export default function IntegrationsPage() {
                           )}
                         </div>
                         <span className="text-[11px] text-zinc-500 font-mono">
-                          ID: {item.id} • Phone ID: {item.phone_number_id} • WABA: {item.waba_id}
+                          Project: {item.project_name || "Default Project"} • ID: {item.id} • Phone ID: {item.phone_number_id} • WABA: {item.waba_id}
                         </span>
                       </div>
                     </div>
@@ -671,8 +707,9 @@ export default function IntegrationsPage() {
               </div>
 
               {formError && (
-                <div className="p-3 rounded-lg border border-rose-500/20 bg-rose-500/10 text-xs text-rose-300">
-                  {formError}
+                <div className="p-3 rounded-lg border border-rose-500/20 bg-rose-500/10 text-xs text-rose-300 flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span className="leading-relaxed">{formError}</span>
                 </div>
               )}
 
@@ -752,6 +789,68 @@ export default function IntegrationsPage() {
               ) : (
                 /* CREATION FORM WITH VISIBLE WEBHOOK CONFIGURATION */
                 <form onSubmit={handleSubmit} className="space-y-5 text-xs">
+                  {/* Target Project Selector */}
+                  <div>
+                    {loadingProjects ? (
+                      <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950 text-zinc-500 text-xs">
+                        Loading workspaces...
+                      </div>
+                    ) : projects.length === 0 ? (
+                      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-300 text-xs space-y-1.5">
+                        <div className="font-semibold flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4 text-amber-400" /> No Active Project Found
+                        </div>
+                        <p className="text-zinc-400 leading-relaxed">
+                          Integrations must be associated with a valid project. Please create a project before connecting WhatsApp credentials.
+                        </p>
+                        <a
+                          href="/dashboard/projects"
+                          className="inline-flex items-center gap-1 font-semibold text-emerald-400 underline hover:text-emerald-300"
+                        >
+                          Go to Project Management <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
+                    ) : projects.length === 1 ? (
+                      <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-950 flex items-center justify-between">
+                        <div>
+                          <span className="text-[10px] text-zinc-500 uppercase tracking-wider block font-semibold">
+                            Target Project Workspace
+                          </span>
+                          <span className="text-xs font-semibold text-white flex items-center gap-1.5 mt-0.5">
+                            <Layers className="h-3.5 w-3.5 text-emerald-400" />
+                            {projects[0].name}
+                            {projects[0].is_default && (
+                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+                                Default
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-zinc-500 font-mono">ID: {projects[0].id}</span>
+                      </div>
+                    ) : (
+                      <div>
+                        <label className="block text-zinc-300 font-medium mb-1">
+                          Target Project / Workspace
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={selectedProjectId}
+                            onChange={(e) => setSelectedProjectId(e.target.value)}
+                            required
+                            className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none text-xs"
+                          >
+                            {projects.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.name} {p.is_default ? "(Default)" : ""} ({p.slug})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   {/* Webhook Configuration Preview Box */}
                   {(() => {
                     const draftWebhookUrl = `${appBaseUrl.replace(/\/$/, "")}/api/webhooks/whatsapp/${modalDraft.id}`;
@@ -946,7 +1045,7 @@ export default function IntegrationsPage() {
                     </button>
                     <button
                       type="submit"
-                      disabled={submitting}
+                      disabled={submitting || !selectedProjectId || projects.length === 0}
                       className="px-4 py-1.5 rounded-lg bg-emerald-500 text-zinc-950 font-medium hover:bg-emerald-400 transition-colors disabled:opacity-50"
                     >
                       {submitting ? "Encrypting & Saving..." : "Connect & Save Integration"}
