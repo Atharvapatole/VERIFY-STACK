@@ -96,6 +96,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Synchronize app_metadata role for fast edge middleware verification
+  try {
+    await adminClient.auth.admin.updateUserById(user.id, {
+      app_metadata: { ...user.app_metadata, role: "admin" },
+    });
+  } catch (syncErr) {
+    console.warn("Failed to sync app_metadata role:", syncErr);
+  }
+
   // Audit log successful admin sign-in
   await recordAdminAuditLog({
     adminId: user.id,

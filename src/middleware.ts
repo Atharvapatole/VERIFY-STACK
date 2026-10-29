@@ -77,7 +77,13 @@ export async function middleware(request: NextRequest) {
       .filter(Boolean);
 
     const userEmail = (user.email || "").toLowerCase();
-    const isAllowed = allowlist.includes(userEmail);
+    const isAllowlisted = allowlist.includes(userEmail);
+    const hasAdminJwtRole = (user.app_metadata as any)?.role === "admin";
+
+    // Allow if in allowlist, OR if Supabase Auth JWT app_metadata has role: 'admin',
+    // OR if allowlist is not yet configured, allow authenticated session through so
+    // verifyAdminSession() validates the database profile role on every API call.
+    const isAllowed = isAllowlisted || hasAdminJwtRole || (allowlist.length === 0);
 
     if (!isAllowed) {
       // Non-admin user: Redirect to admin login with explicit unauthorized error

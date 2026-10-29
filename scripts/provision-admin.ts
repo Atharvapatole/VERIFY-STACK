@@ -68,12 +68,31 @@ If it does not exist, a new user will be created (requires --password).
       .eq("id", existingProfile.id);
 
     if (updateErr) {
-      console.error("Failed to promote user:", updateErr.message);
+      console.error("Failed to promote user in database:", updateErr.message);
       process.exit(1);
     }
 
-    console.log(`Success! User ${email} has been promoted to platform administrator.`);
-    console.log(`Ensure that ${email} is also added to ADMIN_EMAIL_ALLOWLIST in your Vercel environment variables.`);
+    // Update Supabase Auth app_metadata so middleware recognizes admin session
+    const updateAuthPayload: any = {
+      app_metadata: { role: "admin" },
+    };
+    if (password && password.length >= 8) {
+      updateAuthPayload.password = password;
+      console.log("Updated password for existing administrator account.");
+    }
+
+    const { error: authUpdateErr } = await supabase.auth.admin.updateUserById(
+      existingProfile.id,
+      updateAuthPayload
+    );
+
+    if (authUpdateErr) {
+      console.warn("Warning: Could not update Supabase Auth app_metadata:", authUpdateErr.message);
+    }
+
+    console.log(`\nSuccess! User ${email} has been promoted to platform administrator.`);
+    console.log(`Recommended: Add ${email} to ADMIN_EMAIL_ALLOWLIST in your Vercel environment variables.`);
+    console.log(`Sign in at: https://verifystack-lyart.vercel.app/platform-admin/login`);
     return;
   }
 
@@ -88,6 +107,7 @@ If it does not exist, a new user will be created (requires --password).
     email,
     password,
     email_confirm: true,
+    app_metadata: { role: "admin" },
     user_metadata: { full_name: fullName },
   });
 

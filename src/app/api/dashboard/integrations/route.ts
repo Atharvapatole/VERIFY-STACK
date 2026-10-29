@@ -6,6 +6,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptSecret } from "@/lib/crypto/aes";
 
 const createIntegrationSchema = z.object({
+  id: z.string().uuid().optional(),
   projectId: z.string().uuid(),
   name: z.string().min(2).max(100),
   phoneNumberId: z.string().min(5).max(50),
@@ -14,6 +15,7 @@ const createIntegrationSchema = z.object({
   appSecret: z.string().min(10),
   templateName: z.string().default("otp_authentication"),
   templateLanguage: z.string().default("en_US"),
+  webhookVerifyToken: z.string().min(16).optional(),
   isSandbox: z.boolean().default(false),
 });
 
@@ -57,8 +59,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Failed to fetch integrations" }, { status: 500 });
   }
 
+  const sanitizedIntegrations = (integrations || []).map((item) => ({
+    ...item,
+    // Never expose stored verification tokens in plaintext after initial creation
+    webhook_verify_token: item.webhook_verify_token ? "whsec_••••••••••••••••••••••••" : null,
+    has_webhook_verify_token: Boolean(item.webhook_verify_token),
+  }));
+
   return NextResponse.json({
-    integrations: integrations || [],
+    integrations: sanitizedIntegrations,
   });
 }
 
@@ -120,31 +129,37 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Generate strong random webhook verification token (32 random bytes = 64 hex chars)
-  const webhookVerifyToken = crypto.randomBytes(32).toString("hex");
+  // Generate or accept pre-allocated strong random webhook verification token
+  const finalVerifyToken = parsed.data.webhookVerifyToken || ("whsec_" + crypto.randomBytes(24).toString("hex"));
+
+  const insertPayload: any = {
+    project_id: projectId,
+    user_id: user.id,
+    name,
+    phone_number_id: phoneNumberId,
+    waba_id: wabaId,
+    template_name: templateName,
+    template_language: templateLanguage,
+    webhook_verify_token: finalVerifyToken,
+    encrypted_access_token: encryptedAccessToken,
+    encrypted_app_secret: encryptedAppSecret,
+    key_version: 1,
+    status: isSandbox ? "verified" : "pending",
+    is_sandbox: isSandbox,
+  };
+
+  if (parsed.data.id) {
+    insertPayload.id = parsed.data.id;
+  }
 
   const { data: integration, error: insertError } = await admin
     .from("integrations")
-    .insert({
-      project_id: projectId,
-      user_id: user.id,
-      name,
-      phone_number_id: phoneNumberId,
-      waba_id: wabaId,
-      template_name: templateName,
-      template_language: templateLanguage,
-      webhook_verify_token: webhookVerifyToken,
-      encrypted_access_token: encryptedAccessToken,
-      encrypted_app_secret: encryptedAppSecret,
-      key_version: 1,
-      status: isSandbox ? "verified" : "pending",
-      is_sandbox: isSandbox,
-    })
+    .insert(insertPayload)
     .select("id, name, phone_number_id, waba_id, template_name, template_language, webhook_verify_token, status, is_sandbox, created_at")
     .single();
 
   if (insertError || !integration) {
-    return NextResponse.json({ error: "Failed to save integration." }, { status: 500 });
+    return NextResponse.json({ error: "Failed to save integration: " + (insertError?.message || "") }, { status: 500 });
   }
 
   // Audit log
@@ -158,7 +173,12 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     success: true,
-    integration,
+    integration: {
+      ...integration,
+      webhook_verify_token: "whsec_••••••••••••••••••••••••",
+      raw_webhook_verify_token: finalVerifyToken, // Exposed once upon creation
+    },
+    raw_webhook_verify_token: finalVerifyToken,
   });
 }
 

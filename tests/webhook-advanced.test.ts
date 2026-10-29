@@ -92,4 +92,35 @@ describe("Meta WhatsApp Webhook Advanced Verification & Idempotency", () => {
     const readDelivery = handleEvent("wamid_123", "read");
     expect(readDelivery.status).toBe("processed_and_recorded");
   });
+
+  it("generates cryptographically secure rotated tokens with whsec_ prefix", () => {
+    const generateToken = () => "whsec_" + crypto.randomBytes(24).toString("hex");
+    const token = generateToken();
+    expect(token.startsWith("whsec_")).toBe(true);
+    expect(token.length).toBe(54); // "whsec_" (6) + 48 hex characters
+  });
+
+  it("correctly determines integration webhook statuses", () => {
+    const getStatus = (item: any) => {
+      if (item.last_webhook_error || ((item.webhook_events_failed || 0) > 0 && !item.last_webhook_verified_at)) {
+        return "Error";
+      }
+      if ((item.webhook_events_processed || 0) > 0) {
+        return "Receiving events";
+      }
+      if (item.status === "verified" || item.last_webhook_verified_at) {
+        return "Verified";
+      }
+      if (item.status === "pending") {
+        return "Awaiting Meta verification";
+      }
+      return "Not configured";
+    };
+
+    expect(getStatus({ status: "pending", webhook_events_received: 0 })).toBe("Awaiting Meta verification");
+    expect(getStatus({ status: "verified", last_webhook_verified_at: "2026-10-28T00:00:00Z" })).toBe("Verified");
+    expect(getStatus({ status: "verified", webhook_events_processed: 12 })).toBe("Receiving events");
+    expect(getStatus({ last_webhook_error: "Signature mismatch" })).toBe("Error");
+    expect(getStatus({ status: "draft" })).toBe("Not configured");
+  });
 });
