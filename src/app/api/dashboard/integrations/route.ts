@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { encryptSecret } from "@/lib/crypto/aes";
+import { ensureUserProfile } from "@/lib/user-profile";
 
 const createIntegrationSchema = z.object({
   id: z.string().uuid().optional(),
@@ -25,6 +26,12 @@ export async function GET(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await ensureUserProfile(user);
+  } catch (err) {
+    console.error("Profile synchronization error in integrations GET:", err);
   }
 
   const admin = createAdminClient();
@@ -86,6 +93,12 @@ export async function POST(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await ensureUserProfile(user);
+  } catch (err) {
+    console.error("Profile synchronization error in integrations GET:", err);
   }
 
   let body: any;
@@ -197,6 +210,12 @@ export async function DELETE(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    await ensureUserProfile(user);
+  } catch (err) {
+    console.error("Profile synchronization error in integrations GET:", err);
   }
 
   const searchParams = request.nextUrl.searchParams;
